@@ -202,7 +202,8 @@ when the controller JAR and Java are available. [NASA trajectories](https://scie
 
 The profiling command reports median runtime and rows per second after a
 warm-up. It measures the numerical engine and telemetry construction,
-excluding imports, file I/O, and Java process startup.
+excluding imports, file I/O, and Java process startup. Add `--memory` to
+measure peak Python-tracked allocations in a separate run.
 
 The [GitHub Actions workflow](.github/workflows/verify.yml) builds both Java
 modules and runs the tests on Ubuntu with Python 3.11 and Java 17, and on
@@ -212,3 +213,8 @@ On the Windows development machine with Python 3.12, the one-day J₂ example
 produced 2,881 rows. Across 11 runs, the median dropped from 0.755 s to
 0.206 s after specializing three-component cross products and computing
 dense interpolation only when needed.
+
+A separate capacity check streamed 100,000 rows from a 0.12-eccentricity
+orbit sampled at 1 s. Propagation took 3.09 s in one run and peaked at
+36.9 KiB in Python-tracked allocations in a separate run. The Java
+controller published the full CSV, and the viewer read all 100,000 rows.

@@ -3,6 +3,7 @@
 import argparse
 import cProfile
 import pstats
+import tracemalloc
 from statistics import median
 from time import perf_counter
 
@@ -18,6 +19,7 @@ def main() -> None:
     parser.add_argument("mission", help="path to a version 1 JSON mission plan")
     parser.add_argument("--runs", type=int, default=5, help="timed runs after warm-up (1–30)")
     parser.add_argument("--profile", action="store_true", help="show the functions with the most internal time")
+    parser.add_argument("--memory", action="store_true", help="measure peak Python-tracked allocations in a separate run")
     args = parser.parse_args()
     if not 1 <= args.runs <= 30:
         parser.error("--runs must be between 1 and 30")
@@ -34,6 +36,14 @@ def main() -> None:
         profiler = cProfile.Profile()
         profiler.runcall(count_telemetry, mission)
         pstats.Stats(profiler).strip_dirs().sort_stats("tottime").print_stats(15)
+    if args.memory:
+        tracemalloc.start()
+        try:
+            count_telemetry(mission)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        print(f"Peak Python-tracked allocations during propagation: {peak / 1024:,.1f} KiB")
 
 
 if __name__ == "__main__":
