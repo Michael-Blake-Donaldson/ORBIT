@@ -416,7 +416,7 @@ public final class OrbitViewer extends Application {
 
     private static String eventColor(Telemetry.Kind kind) {
         return switch (kind) {
-            case POST_BURN -> "burn-color";
+            case POST_BURN, BURN_START, BURN_END -> "burn-color";
             case IMPACT -> "impact-color";
             default -> "spacecraft-color";
         };

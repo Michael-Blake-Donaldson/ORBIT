@@ -21,7 +21,8 @@ final class Telemetry {
     private static final int COLUMN_COUNT = 18;
 
     enum Kind {
-        SAMPLE("Sample"), PRE_BURN("Pre-burn"), POST_BURN("Post-burn"), COMPLETE("Complete"), IMPACT("Impact");
+        SAMPLE("Sample"), BURN_END("Burn cutoff"), PRE_BURN("Pre-burn"), POST_BURN("Post-burn"),
+        BURN_START("Burn ignition"), COMPLETE("Complete"), IMPACT("Impact");
 
         private final String label;
 
@@ -37,11 +38,17 @@ final class Telemetry {
             return this == COMPLETE || this == IMPACT;
         }
 
+        boolean maneuverEvent() {
+            return this == POST_BURN || this == BURN_START || this == BURN_END;
+        }
+
         static Kind parse(String value) {
             return switch (value) {
                 case "sample" -> SAMPLE;
                 case "pre_burn" -> PRE_BURN;
                 case "post_burn" -> POST_BURN;
+                case "burn_start" -> BURN_START;
+                case "burn_end" -> BURN_END;
                 case "complete" -> COMPLETE;
                 case "impact" -> IMPACT;
                 default -> throw new IllegalArgumentException("unknown row kind");
@@ -103,6 +110,7 @@ final class Telemetry {
                 throw new IOException("The file is missing the ORBIT telemetry header.");
             }
             Sample previous = null;
+            boolean burning = false;
             for (String line = readLine(input, buffer); line != null; line = readLine(input, buffer)) {
                 if (Thread.currentThread().isInterrupted()) {
                     throw new IOException("Telemetry loading was interrupted.");
@@ -111,8 +119,11 @@ final class Telemetry {
                     throw new IOException("Telemetry exceeds the 100,000-row limit.");
                 }
                 Sample row = parse(line, rows.size() + 2);
-                checkOrder(previous, row, rows.size() + 2);
-                if (row.kind() == Kind.POST_BURN || row.kind().terminal()) {
+                checkOrder(previous, row, burning, rows.size() + 2);
+                if (row.kind().maneuverEvent()) {
+                    burning = row.kind() == Kind.BURN_START;
+                }
+                if (row.kind().maneuverEvent() || row.kind().terminal()) {
                     events.add(rows.size());
                 }
                 rows.add(row);
@@ -176,21 +187,30 @@ final class Telemetry {
         }
     }
 
-    private static void checkOrder(Sample previous, Sample row, int lineNumber) throws IOException {
+    private static void checkOrder(Sample previous, Sample row, boolean burning, int lineNumber) throws IOException {
+        Kind kind = row.kind();
         boolean valid;
         if (previous == null) {
-            valid = row.time() == 0 && (row.kind() == Kind.SAMPLE || row.kind() == Kind.PRE_BURN);
+            valid = row.time() == 0 && (kind == Kind.SAMPLE || kind == Kind.PRE_BURN || kind == Kind.BURN_START);
         } else if (previous.kind() == Kind.PRE_BURN) {
-            valid = row.kind() == Kind.POST_BURN && row.time() == previous.time();
+            valid = kind == Kind.POST_BURN && row.time() == previous.time();
         } else {
-            boolean sameTime = row.time() == previous.time();
-            valid = !previous.kind().terminal() && row.kind() != Kind.POST_BURN
-                    && (row.time() > previous.time() || (sameTime && row.kind() == Kind.IMPACT)
-                        || (sameTime && previous.kind() == Kind.POST_BURN && row.kind() == Kind.COMPLETE));
+            valid = !previous.kind().terminal() && kind != Kind.POST_BURN
+                    && (row.time() > previous.time()
+                        || (row.time() == previous.time() && sameTimeAllowed(previous.kind(), kind)));
         }
-        if (!valid) {
+        boolean allowedDuringThrust = kind == Kind.SAMPLE || kind == Kind.BURN_END || kind == Kind.IMPACT;
+        if (!valid || (burning && !allowedDuringThrust) || (!burning && kind == Kind.BURN_END)) {
             throw new IOException("Line " + lineNumber + " has an unexpected timestamp or event order.");
         }
+    }
+
+    private static boolean sameTimeAllowed(Kind previous, Kind next) {
+        return next == Kind.IMPACT || switch (previous) {
+            case BURN_END -> next == Kind.PRE_BURN || next == Kind.BURN_START || next == Kind.COMPLETE;
+            case POST_BURN -> next == Kind.BURN_START || next == Kind.COMPLETE;
+            default -> false;
+        };
     }
 
     private static double bounded(String value, double minimum, double maximum) {

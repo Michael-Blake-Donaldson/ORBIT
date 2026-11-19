@@ -44,6 +44,27 @@ class TelemetryTest {
     }
 
     @Test
+    void indexesFiniteBurnsAndAnImpulseAtTheSharedBoundary() throws IOException {
+        Telemetry.Flight flight = Telemetry.load(write(
+                row(0, "burn_start") + row(5, "sample") + row(10, "burn_end")
+                        + row(10, "pre_burn") + row(10, "post_burn") + row(10, "burn_start")
+                        + row(20, "burn_end") + row(20, "complete")));
+        assertEquals(java.util.List.of(0, 2, 4, 5, 6, 7), flight.events());
+        assertEquals(5, flight.rowAt(10));
+        assertEquals(7, flight.rowAt(20));
+    }
+
+    @Test
+    void permitsAnImpactDuringThrustAndRejectsInvalidFiniteBurnSequences() throws IOException {
+        String start = row(0, "burn_start");
+        assertEquals(Telemetry.Kind.IMPACT, Telemetry.load(write(start + row(10, "impact"))).last().kind());
+        assertThrows(IOException.class, () -> Telemetry.load(write(start + row(10, "complete"))));
+        assertThrows(IOException.class, () -> Telemetry.load(write(start + row(5, "burn_start") + row(10, "impact"))));
+        assertThrows(IOException.class, () -> Telemetry.load(write(
+                row(0, "sample") + row(5, "burn_end") + row(10, "complete"))));
+    }
+
+    @Test
     void rejectsMalformedOrNonfiniteNumbersAndOversizedRows() throws IOException {
         assertThrows(IOException.class, () -> Telemetry.load(write("0,sample\n")));
         String invalid = row(0, "sample").replace("7000", "NaN");

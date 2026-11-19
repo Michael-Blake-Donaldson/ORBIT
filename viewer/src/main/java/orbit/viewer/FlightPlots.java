@@ -142,7 +142,7 @@ final class FlightPlots {
                 path(g, cx, cy, scale, selected, TEAL, 2.25);
                 for (int event : flight.events()) {
                     Telemetry.Sample row = flight.rows().get(event);
-                    if (row.kind() == Telemetry.Kind.POST_BURN) {
+                    if (row.kind().maneuverEvent()) {
                         dot(g, x(row, cx, scale), y(row, cy, scale), 4, AMBER, BACKGROUND);
                     }
                 }

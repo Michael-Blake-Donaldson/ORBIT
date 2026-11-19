@@ -33,6 +33,7 @@ uv run --locked python -m orbit_sim examples/j2_precession.json output/j2.csv
 | --- | --- |
 | [Hohmann transfer](examples/hohmann.json) | Two prograde burns raise a circular orbit from 7,000 km to 12,000 km geocentric radius. Final mass is about 572.35 kg. |
 | [J₂ nodal regression](examples/j2_precession.json) | A 55° inclined orbit regresses by about 4.1° per day. RAAN wraps through 360°. |
+| [Finite prograde burn](examples/finite_burn.json) | A 1,500 N transverse burn from 600 to 720 s raises the orbit and consumes about 57.36 kg. |
 
 ## Replay telemetry in JavaFX
 
@@ -45,8 +46,9 @@ mvn -f viewer/pom.xml javafx:run
 Select **Open CSV…** and choose a telemetry file produced by either CLI.
 Switch between the XY, XZ, and YZ projections to inspect the orbit around
 Earth. The altitude chart and sample inspector follow playback and scrubbing.
-Select a burn in **Mission events** to inspect the post-burn state, then step
-back one row to compare the pre-burn state at the same timestamp.
+Select an impulse in **Mission events** to inspect the post-burn state, then
+step back one row to compare the pre-burn state at the same timestamp.
+Finite burns show separate ignition and cutoff markers.
 
 You can also open a file at launch. The Maven plugin resolves relative paths
 from the `viewer` directory:
@@ -75,8 +77,9 @@ Optional fields:
 | Field | Meaning |
 | --- | --- |
 | `gravity` | `point_mass` (default) or `j2`. |
-| `impulses` | Up to 1,000 objects with `time_s`, `delta_v_km_s`, and optional `frame` (`ECI` by default or `RTN`). Times must increase strictly and may include both endpoints. |
-| `spacecraft` | `initial_mass_kg`, `dry_mass_kg`, and `isp_s`. Providing this object enables propellant accounting for every applied impulse. |
+| `impulses` | Objects with `time_s`, `delta_v_km_s`, and optional `frame` (`ECI` by default or `RTN`). Times must increase strictly and may include both endpoints. |
+| `finite_burns` | Objects with `start_s`, `end_s`, `thrust_n`, and optional `frame` (`ECI` by default or `RTN`). Each burn lasts at least 1 ms. Windows must be ordered, nonoverlapping, and within the mission. |
+| `spacecraft` | `initial_mass_kg`, `dry_mass_kg`, and `isp_s`. Required for finite burns and optional for impulsive propellant accounting. |
 | `integrator` | Optional overrides for `relative_tolerance` (default `1e-11`), `position_tolerance_km` (`1e-8`), `velocity_tolerance_km_s` (`1e-11`), and `max_step_s` (`120`). |
 
 ECI is an Earth-centered inertial frame with a fixed north-pole axis and a
@@ -87,6 +90,14 @@ instantaneously. It retains position and, when a spacecraft is configured,
 updates mass by the ideal rocket equation. A burn that would violate dry
 mass fails the mission. [NASA ideal rocket equation](https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/ideal-rocket-equation/)
 
+For finite burns, `thrust_n` is a three-component force in newtons. ORBIT
+uses its constant magnitude to compute mass flow `|F| / (g₀ Isp)` and
+integrates acceleration `F / m(t)` alongside gravity. An RTN burn recomputes
+its direction as the spacecraft moves. The full scheduled burn must fit
+the available propellant at ignition. If contact occurs during a burn,
+impact telemetry reports the mass at contact. The mission supports up to
+1,000 maneuvers, and impulses can share a burn endpoint. [NASA astrodynamics modeling reference](https://ntrs.nasa.gov/citations/20220014814)
+
 ## Telemetry and model
 
 - The CSV includes elapsed time, row kind, ECI Cartesian state, spherical
@@ -94,22 +105,23 @@ mass fails the mission. [NASA ideal rocket equation](https://www1.grc.nasa.gov/b
   Keplerian elements. Blank fields represent unavailable mass or undefined
   elements, such as RAAN for an equatorial orbit.
 - Rows are ordered by elapsed time. A burn emits `pre_burn` and `post_burn`
-  at the same timestamp and replaces any regular sample there. At the end
-  time, a scheduled burn is followed by a `complete` row at that same time.
-  Earth contact terminates the simulation with an `impact` row. Both
-  `complete` and `impact` are successful simulation outcomes.
+  at the same timestamp for an impulse. Finite burns emit `burn_start` and
+  `burn_end`. Shared timestamps are ordered cutoff, impulse, ignition,
+  then mission completion where applicable. Event rows replace a cadence
+  row at the same timestamp. Earth contact terminates the simulation with
+  an `impact` row. Both `complete` and `impact` are successful simulation outcomes.
 - The model uses WGS 84 nominal Earth constants. J₂ mode applies only the
   leading zonal harmonic and reports energy including its contribution to
   the potential. The elements are instantaneous two-body elements in either
   gravity mode. Surface contact uses a sphere of radius 6,378.137 km.
   [NGA WGS 84](https://earth-info.nga.mil/?action=wgs84&dir=wgs84)
-- SciPy's adaptive DOP853 integrator advances the state between impulses. Its
+- SciPy's adaptive DOP853 integrator advances the state between maneuver boundaries. Its
   dense interpolation supplies telemetry and brackets surface contact.
   Tolerances control local integration error. See the tests for measured
   trajectory error on the reference cases. [SciPy DOP853](https://docs.scipy.org/doc/scipy/reference/generated/scipy.integrate.DOP853.html)
-- This model covers point-mass and J₂ gravity with instantaneous thrust.
+- This model covers point-mass and J₂ gravity with impulsive and constant-magnitude finite thrust.
   Atmospheric drag, third-body gravity, higher harmonics, Earth orientation
-  data, and finite burns are outside its fidelity.
+  data, and actuator transients are outside its fidelity.
 
 The Java controller launches a caller-selected, trusted Python executable
 without a shell. It accepts valid terminal telemetry from a successful worker
@@ -148,7 +160,9 @@ uv run --locked python tools/profile_mission.py examples/j2_precession.json --ru
 ```
 
 The tests compare circular states, eccentric-orbit apoapsis, Hohmann transfer,
-and ideal propellant use against analytic calculations. The J₂ test compares
+and propellant use against analytic calculations. Finite-thrust tests also
+check velocity and displacement against the closed-form free-space solution.
+The J₂ test compares
 fitted RAAN drift to NASA's first-order secular model and checks conservation
 of energy and axial angular momentum. The shallow-impact test uses the
 analytic Kepler time of the first surface crossing. Java integration tests run

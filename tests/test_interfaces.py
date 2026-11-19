@@ -106,6 +106,15 @@ class PythonCliTests(FileTestCase):
 
 @unittest.skipUnless(JAVA and JAR.is_file(), "build the Java controller and install Java to run integration tests")
 class ControllerTests(FileTestCase):
+    def test_finite_burn_csv_is_published_with_both_boundaries(self):
+        self.plan.write_bytes((ROOT / "examples" / "finite_burn.json").read_bytes())
+        result = self.launch(self.java_command())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        by_kind = {row["kind"]: row for row in self.rows()}
+        self.assertEqual(float(by_kind["burn_start"]["mass_kg"]), 1000)
+        self.assertLess(float(by_kind["burn_end"]["mass_kg"]), 1000)
+        self.assertEqual(by_kind["burn_end"]["mass_kg"], by_kind["complete"]["mass_kg"])
+
     def test_concurrent_runs_publish_exactly_one_complete_output(self):
         with ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(self.launch, [self.java_command(), self.java_command()]))
