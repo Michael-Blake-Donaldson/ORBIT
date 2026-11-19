@@ -4,9 +4,20 @@ from pathlib import Path
 
 import numpy as np
 
-from orbit_sim import Impulse, Integrator, Mission, SimulationError, Spacecraft, State, load_mission
-from orbit_sim import orbital_elements, propagate
-from orbit_sim.mission import EARTH_J2, EARTH_MU_KM3_S2 as MU, EARTH_RADIUS_KM as RADIUS
+from orbit_sim import (
+    Impulse,
+    Integrator,
+    Mission,
+    SimulationError,
+    Spacecraft,
+    State,
+    load_mission,
+    orbital_elements,
+    propagate,
+)
+from orbit_sim.mission import EARTH_J2
+from orbit_sim.mission import EARTH_MU_KM3_S2 as MU
+from orbit_sim.mission import EARTH_RADIUS_KM as RADIUS
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 

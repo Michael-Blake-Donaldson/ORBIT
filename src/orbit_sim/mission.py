@@ -90,15 +90,15 @@ class Mission:
 
     def __post_init__(self) -> None:
         if not isinstance(self.initial_state, State):
-            raise ValueError("initial_state must be a State")
+            raise TypeError("initial_state must be a State")
         number(hypot(*self.initial_state.velocity_km_s), "initial speed (km/s)", 0, 1000)
         radius = hypot(*self.initial_state.position_km)
         if not EARTH_RADIUS_KM < radius <= 1e10:
             raise ValueError("initial position must be above the spherical Earth surface and within 1e10 km")
         if not isinstance(self.integrator, Integrator):
-            raise ValueError("integrator must be an Integrator")
+            raise TypeError("integrator must be an Integrator")
         if self.spacecraft is not None and not isinstance(self.spacecraft, Spacecraft):
-            raise ValueError("spacecraft must be a Spacecraft")
+            raise TypeError("spacecraft must be a Spacecraft")
         if self.gravity not in ("point_mass", "j2"):
             raise ValueError("gravity must be point_mass or j2")
 

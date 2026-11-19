@@ -26,7 +26,7 @@ def _reject_constant(constant: str) -> None:
 
 def _construct(cls: type[_Config], value: object) -> _Config:
     if not isinstance(value, dict):
-        raise ValueError(f"{cls.__name__} must be an object")
+        raise ValueError(f"{cls.__name__} must be an object")  # noqa: TRY004 - JSON schema violation
     unknown = value.keys() - {field.name for field in fields(cls)}
     if unknown:
         raise ValueError(f"unknown {cls.__name__} property {min(unknown)[:80]!r}")
@@ -50,7 +50,7 @@ def load_mission(path: str | Path) -> Mission:
     except RecursionError as exc:
         raise ValueError("mission plan is nested too deeply") from exc
     if not isinstance(values, dict):
-        raise ValueError("mission plan must be a JSON object")
+        raise ValueError("mission plan must be a JSON object")  # noqa: TRY004 - JSON schema violation
     version = values.pop("schema_version", None)
     if type(version) is not int or version != 1:
         raise ValueError("schema_version must be the integer 1")

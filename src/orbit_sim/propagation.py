@@ -9,7 +9,14 @@ import numpy as np
 from scipy.integrate import DOP853, DenseOutput
 from scipy.optimize import brentq
 
-from .mechanics import Array, OrbitalElements, _cross, _dynamics, _orbital_elements, _specific_energy
+from .mechanics import (
+    Array,
+    OrbitalElements,
+    _cross,
+    _dynamics,
+    _orbital_elements,
+    _specific_energy,
+)
 from .mission import EARTH_RADIUS_KM, STANDARD_GRAVITY_KM_S2, Impulse, Mission, State
 
 SampleKind = Literal["sample", "pre_burn", "post_burn", "complete", "impact"]

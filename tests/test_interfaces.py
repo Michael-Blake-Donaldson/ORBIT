@@ -43,7 +43,7 @@ class FileTestCase(unittest.TestCase):
         return [JAVA, "-jar", str(JAR), python or sys.executable, str(self.plan), str(self.output), timeout]
 
     def launch(self, command):
-        return subprocess.run(command, capture_output=True, text=True, timeout=45, cwd=self.directory)
+        return subprocess.run(command, check=False, capture_output=True, text=True, timeout=45, cwd=self.directory)
 
     def rows(self):
         with self.output.open(encoding="utf-8", newline="") as file:
