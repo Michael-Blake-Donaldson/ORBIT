@@ -1,8 +1,9 @@
 {
   "schema_version": 1,
-  "initial_state": {
-    "position_km": [7000, 0, 0],
-    "velocity_km_s": [0, 4.32823835465497, 6.181364978905265]
+  "initial_orbit": {
+    "periapsis_radius_km": 7000,
+    "eccentricity": 0,
+    "inclination_deg": 55
   },
   "duration_s": 86400,
   "sample_interval_s": 30,

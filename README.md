@@ -68,7 +68,7 @@ Plans use UTF-8 JSON. The required fields are:
 | Field | Meaning |
 | --- | --- |
 | `schema_version` | Integer `1`. |
-| `initial_state` | `position_km` and `velocity_km_s` as three-component ECI arrays at elapsed time zero. |
+| `initial_state` or `initial_orbit` | Exactly one Cartesian or Keplerian description at elapsed time zero. |
 | `duration_s` | End time in seconds, from 0.001 s to 30 days. |
 | `sample_interval_s` | Regular telemetry spacing in seconds, from 0.001 s to 30 days. |
 
@@ -81,6 +81,15 @@ Optional fields:
 | `finite_burns` | Objects with `start_s`, `end_s`, `thrust_n`, and optional `frame` (`ECI` by default or `RTN`). Each burn lasts at least 1 ms. Windows must be ordered, nonoverlapping, and within the mission. |
 | `spacecraft` | `initial_mass_kg`, `dry_mass_kg`, and `isp_s`. Required for finite burns and optional for impulsive propellant accounting. |
 | `integrator` | Optional overrides for `relative_tolerance` (default `1e-11`), `position_tolerance_km` (`1e-8`), `velocity_tolerance_km_s` (`1e-11`), and `max_step_s` (`120`). |
+
+`initial_state` uses three-component ECI arrays `position_km` and
+`velocity_km_s`. `initial_orbit` uses `periapsis_radius_km` and
+`eccentricity`, plus `inclination_deg`, `raan_deg`,
+`argument_of_periapsis_deg`, and `true_anomaly_deg`, whose defaults are
+zero. Periapsis radius is measured from Earth's center. Elliptic, parabolic,
+and hyperbolic initial states use the same elements. For a circular
+equatorial orbit, set RAAN and argument of periapsis to zero to measure
+true anomaly from the inertial x-axis for a prograde orbit.
 
 ECI is an Earth-centered inertial frame with a fixed north-pole axis and a
 user-defined equatorial x-axis. Specify all inertial vectors in that same
@@ -162,6 +171,10 @@ uv run --locked python tools/profile_mission.py examples/j2_precession.json --ru
 The tests compare circular states, eccentric-orbit apoapsis, Hohmann transfer,
 and propellant use against analytic calculations. Finite-thrust tests also
 check velocity and displacement against the closed-form free-space solution.
+Stored JPL CSPICE reference vectors check position and velocity for elliptic,
+parabolic, and hyperbolic conics at initialization and after 9,000 s.
+[JPL CSPICE conic reference](https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/C/cspice/conics_c.html)
+
 The J₂ test compares
 fitted RAAN drift to NASA's first-order secular model and checks conservation
 of energy and axial angular momentum. The shallow-impact test uses the

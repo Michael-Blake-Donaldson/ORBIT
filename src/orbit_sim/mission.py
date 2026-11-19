@@ -36,6 +36,29 @@ class State:
 
 
 @dataclass(frozen=True, slots=True)
+class KeplerianOrbit:
+    """Conic initial conditions using true anomaly and periapsis radius."""
+
+    periapsis_radius_km: float
+    eccentricity: float
+    inclination_deg: float = 0.0
+    raan_deg: float = 0.0
+    argument_of_periapsis_deg: float = 0.0
+    true_anomaly_deg: float = 0.0
+
+    def __post_init__(self) -> None:
+        for field, low, high in (
+            ("periapsis_radius_km", 1e-3, 1e10),
+            ("eccentricity", 0, 1e4),
+            ("inclination_deg", 0, 180),
+            ("raan_deg", -360, 360),
+            ("argument_of_periapsis_deg", -360, 360),
+            ("true_anomaly_deg", -360, 360),
+        ):
+            object.__setattr__(self, field, number(getattr(self, field), field, low, high))
+
+
+@dataclass(frozen=True, slots=True)
 class Impulse:
     time_s: float
     delta_v_km_s: Vector

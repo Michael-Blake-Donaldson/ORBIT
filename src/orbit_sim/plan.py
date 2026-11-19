@@ -5,10 +5,19 @@ from dataclasses import fields
 from pathlib import Path
 from typing import TypeVar
 
-from .mission import FiniteBurn, Impulse, Integrator, Mission, Spacecraft, State
+from .mechanics import state_from_keplerian
+from .mission import (
+    FiniteBurn,
+    Impulse,
+    Integrator,
+    KeplerianOrbit,
+    Mission,
+    Spacecraft,
+    State,
+)
 
 _MAX_PLAN_BYTES = 256 * 1024
-_Config = TypeVar("_Config", FiniteBurn, Impulse, Integrator, Mission, Spacecraft, State)
+_Config = TypeVar("_Config", FiniteBurn, Impulse, Integrator, KeplerianOrbit, Mission, Spacecraft, State)
 
 
 def _unique_object(items: list[tuple[str, object]]) -> dict[str, object]:
@@ -54,7 +63,12 @@ def load_mission(path: str | Path) -> Mission:
     version = values.pop("schema_version", None)
     if type(version) is not int or version != 1:
         raise ValueError("schema_version must be the integer 1")
-    values["initial_state"] = _construct(State, values.get("initial_state"))
+    if ("initial_state" in values) == ("initial_orbit" in values):
+        raise ValueError("provide exactly one initial_state or initial_orbit")
+    if "initial_orbit" in values:
+        values["initial_state"] = state_from_keplerian(_construct(KeplerianOrbit, values.pop("initial_orbit")))
+    else:
+        values["initial_state"] = _construct(State, values["initial_state"])
     if "impulses" in values:
         impulses = values["impulses"]
         if not isinstance(impulses, list) or len(impulses) > 1000:

@@ -1,12 +1,12 @@
 """Earth gravity and osculating Keplerian elements in the inertial frame."""
 
 from dataclasses import dataclass
-from math import atan2, degrees, hypot
+from math import atan2, cos, degrees, hypot, radians, sin, sqrt
 
 import numpy as np
 from numpy.typing import NDArray
 
-from .mission import EARTH_J2, EARTH_MU_KM3_S2, EARTH_RADIUS_KM, State
+from .mission import EARTH_J2, EARTH_MU_KM3_S2, EARTH_RADIUS_KM, KeplerianOrbit, State
 
 Array = NDArray[np.float64]
 _J2_FACTOR = 1.5 * EARTH_J2 * EARTH_MU_KM3_S2 * EARTH_RADIUS_KM**2
@@ -47,6 +47,30 @@ class OrbitalElements:
     raan_deg: float | None
     argument_of_periapsis_deg: float | None
     true_anomaly_deg: float | None
+
+
+def state_from_keplerian(orbit: KeplerianOrbit) -> State:
+    """Convert ellipse, parabola, or hyperbola elements to an inertial state."""
+    inclination = radians(orbit.inclination_deg)
+    raan = radians(orbit.raan_deg)
+    periapsis = radians(orbit.argument_of_periapsis_deg)
+    anomaly = radians(orbit.true_anomaly_deg)
+    sine, cosine = sin(anomaly), cos(anomaly)
+    eccentricity = orbit.eccentricity
+    inverse_scaled_radius = 1 + eccentricity * cosine
+    if inverse_scaled_radius <= 0:
+        raise ValueError("true anomaly must lie inside the physical branch of the conic")
+
+    # The ascending-node direction and its in-plane perpendicular span the orbit plane.
+    node = np.array((cos(raan), sin(raan), 0.0))
+    along_plane = np.array((-sin(raan) * cos(inclination), cos(raan) * cos(inclination), sin(inclination)))
+    p_axis = cos(periapsis) * node + sin(periapsis) * along_plane
+    q_axis = -sin(periapsis) * node + cos(periapsis) * along_plane
+    semilatus_rectum = orbit.periapsis_radius_km * (1 + eccentricity)
+    radius = semilatus_rectum / inverse_scaled_radius
+    position = radius * (cosine * p_axis + sine * q_axis)
+    velocity = sqrt(EARTH_MU_KM3_S2 / semilatus_rectum) * (-sine * p_axis + (eccentricity + cosine) * q_axis)
+    return State(tuple(map(float, position)), tuple(map(float, velocity)))
 
 
 def _cross(left: Array, right: Array) -> Array:
