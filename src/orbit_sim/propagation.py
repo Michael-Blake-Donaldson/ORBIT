@@ -17,9 +17,12 @@ from .mechanics import (
     _drag_acceleration,
     _dynamics,
     _orbital_elements,
+    _radial_motion,
     _specific_energy,
 )
 from .mission import (
+    EARTH_MU_KM3_S2,
+    MAX_SAMPLES,
     STANDARD_GRAVITY_KM_S2,
     AtmosphericDrag,
     FiniteBurn,
@@ -28,7 +31,11 @@ from .mission import (
     State,
 )
 
-SampleKind = Literal["sample", "pre_burn", "post_burn", "burn_start", "burn_end", "complete", "impact"]
+_Apsis = Literal["periapsis", "apoapsis"]
+_StepEvent = tuple[float, Literal["impact"] | _Apsis]
+SampleKind = Literal[
+    "sample", "pre_burn", "post_burn", "burn_start", "burn_end", "periapsis", "apoapsis", "complete", "impact",
+]
 _MAX_ACCEPTED_STEPS = 100_000
 
 
@@ -97,13 +104,17 @@ def _schedule(mission: Mission) -> dict[float, _Boundary]:
     return boundaries
 
 
-def _radial_motion(state: Array) -> float:
-    return float(state[:3] @ state[3:])
-
-
-def _impact_time(
-    start: float, initial: Array, end: float, final: Array, dense: DenseOutput, crossed_surface: bool,
-) -> float | None:
+def _step_events(
+    start: float,
+    initial: Array,
+    end: float,
+    final: Array,
+    dense: DenseOutput,
+    crossed_surface: bool,
+    apsis: _Apsis | None,
+    report_apsides: bool,
+    dynamics: Callable[[float, Array], Array],
+) -> tuple[_StepEvent, ...]:
     def state_at(time: float) -> Array:
         # Use the accepted states to preserve the root bracket at floating-point endpoints.
         if time == start:
@@ -115,14 +126,31 @@ def _impact_time(
     def altitude_at(time: float) -> float:
         return _altitude(state_at(time))
 
-    if crossed_surface:
-        return brentq(altitude_at, start, end, xtol=1e-9)
+    if crossed_surface and apsis != "apoapsis":
+        return ((brentq(altitude_at, start, end, xtol=1e-9), "impact"),)
 
     # Check the in-step periapsis for a shallow crossing with both endpoints above ground.
-    periapsis_time = brentq(lambda time: _radial_motion(state_at(time)), start, end, xtol=1e-9)
-    if altitude_at(periapsis_time) <= 0:
-        return brentq(altitude_at, start, periapsis_time, xtol=1e-9)
-    return None
+    if apsis is None:
+        return ()
+    turn_time = brentq(lambda time: _radial_motion(state_at(time)), start, end, xtol=1e-9)
+    if apsis == "periapsis" and altitude_at(turn_time) <= 0:
+        return ((brentq(altitude_at, start, turn_time, xtol=1e-9), "impact"),)
+    events: tuple[_StepEvent, ...] = ()
+    if report_apsides and _distinct_apsis(turn_time, state_at(turn_time), dynamics):
+        events = ((turn_time, apsis),)
+    if crossed_surface:
+        # A short outbound coast can turn around and hit Earth during one accepted step.
+        events += ((brentq(altitude_at, turn_time, end, xtol=1e-9), "impact"),)
+    return events
+
+
+def _distinct_apsis(time: float, state: Array, dynamics: Callable[[float, Array], Array]) -> bool:
+    position, velocity = state[:3], state[3:]
+    radius = hypot(*position)
+    acceleration = dynamics(time, state)[3:]
+    # At a radial turning point, r·v is zero. Compare radial curvature with local gravity.
+    curvature = abs(float(velocity @ velocity + position @ acceleration)) / radius
+    return curvature > 1e-8 * EARTH_MU_KM3_S2 / radius**2
 
 
 def _inertial_vector(components: Array, frame: str, state: Array) -> Array:
@@ -158,6 +186,13 @@ def _same_time(left: float, right: float) -> bool:
 
 def propagate(mission: Mission) -> Iterator[Sample]:
     """Yield chronological trajectory samples and exact maneuver boundary rows."""
+    for count, sample in enumerate(_propagate(mission), start=1):
+        if count > MAX_SAMPLES:
+            raise SimulationError(f"mission exceeds the {MAX_SAMPLES} telemetry row budget")
+        yield sample
+
+
+def _propagate(mission: Mission) -> Iterator[Sample]:
     j2 = mission.gravity == "j2"
     dynamics = _dynamics(j2)
     state = np.array((*mission.initial_state.position_km, *mission.initial_state.velocity_km_s))
@@ -175,8 +210,10 @@ def propagate(mission: Mission) -> Iterator[Sample]:
 
     for boundary, events in sorted(boundaries.items()):
         if time < boundary:
+            report_apsides = mission.track_apsides and arc is None
+            segment_dynamics = _segment_dynamics(dynamics, mission.drag, mass, arc)
             solver = DOP853(
-                _segment_dynamics(dynamics, mission.drag, mass, arc), time, state, boundary,
+                segment_dynamics, time, state, boundary,
                 rtol=config.relative_tolerance,
                 atol=absolute_tolerance, max_step=config.max_step_s,
             )
@@ -192,24 +229,44 @@ def propagate(mission: Mission) -> Iterator[Sample]:
                     raise SimulationError(f"integration failed near t={start:g} s: {message}")
                 accepted_steps += 1
                 dense = None
-                impact = None
+                step_events = ()
                 crossed_surface = _altitude(solver.y) <= 0
-                if crossed_surface or _radial_motion(initial) < 0 < _radial_motion(solver.y):
+                initial_motion, final_motion = _radial_motion(initial), _radial_motion(solver.y)
+                apsis = None
+                if initial_motion < 0 <= final_motion:
+                    apsis = "periapsis"
+                elif report_apsides and initial_motion > 0 >= final_motion:
+                    apsis = "apoapsis"
+                if crossed_surface or apsis is not None:
                     dense = solver.dense_output()
-                    impact = _impact_time(start, initial, solver.t, solver.y, dense, crossed_surface)
-                hard_stop = impact if impact is not None else boundary
-                cadence = cadence_index * mission.sample_interval_s
-                while cadence <= solver.t and cadence < hard_stop and not _same_time(cadence, hard_stop):
+                    step_events = _step_events(
+                        start, initial, solver.t, solver.y, dense, crossed_surface, apsis, report_apsides,
+                        segment_dynamics,
+                    )
+                event_index = 0
+                while True:
+                    cadence = cadence_index * mission.sample_interval_s
+                    if event_index < len(step_events) and dense is not None:
+                        event_time, kind = step_events[event_index]
+                        if kind != "impact" and (_same_time(event_time, time) or _same_time(event_time, boundary)):
+                            event_index += 1
+                            continue
+                        coincident = _same_time(cadence, event_time)
+                        if cadence >= event_time or coincident:
+                            current_mass = mass if arc is None else arc.mass_at(event_time)
+                            yield _sample(event_time, kind, dense(event_time), j2, current_mass)
+                            if kind == "impact":
+                                return
+                            cadence_index += int(coincident)
+                            event_index += 1
+                            continue
+                    if cadence > solver.t or cadence >= boundary or _same_time(cadence, boundary):
+                        break
                     if dense is None:
                         dense = solver.dense_output()
                     current_mass = mass if arc is None else arc.mass_at(cadence)
                     yield _sample(cadence, "sample", dense(cadence), j2, current_mass)
                     cadence_index += 1
-                    cadence = cadence_index * mission.sample_interval_s
-                if impact is not None and dense is not None:
-                    current_mass = mass if arc is None else arc.mass_at(impact)
-                    yield _sample(impact, "impact", dense(impact), j2, current_mass)
-                    return
             time, state = solver.t, solver.y
 
         # Boundary events replace a regular sample at the same timestamp.

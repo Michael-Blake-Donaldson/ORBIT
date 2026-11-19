@@ -155,6 +155,7 @@ class Mission:
     integrator: Integrator = Integrator()
     finite_burns: tuple[FiniteBurn, ...] = ()
     drag: AtmosphericDrag | None = None
+    track_apsides: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.initial_state, State):
@@ -171,6 +172,8 @@ class Mission:
             raise TypeError("drag must be an AtmosphericDrag")
         if self.drag is not None and self.spacecraft is None:
             raise ValueError("atmospheric drag requires spacecraft mass")
+        if type(self.track_apsides) is not bool:
+            raise TypeError("track_apsides must be a boolean")
         if self.gravity not in ("point_mass", "j2"):
             raise ValueError("gravity must be point_mass or j2")
 

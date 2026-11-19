@@ -51,6 +51,10 @@ def _altitude(state: Array) -> float:
     return hypot(*state[:3]) - EARTH_RADIUS_KM
 
 
+def _radial_motion(state: Array) -> float:
+    return float(state[:3] @ state[3:])
+
+
 def _drag_acceleration(state: Array, drag: AtmosphericDrag, mass_kg: float) -> Array:
     x, y, _, vx, vy, vz = state
     relative = (vx + EARTH_ROTATION_RAD_S * y, vy - EARTH_ROTATION_RAD_S * x, vz)

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "initial_orbit": {
+    "periapsis_radius_km": 7000,
+    "eccentricity": 0.2,
+    "inclination_deg": 35,
+    "raan_deg": 20
+  },
+  "duration_s": 10200,
+  "sample_interval_s": 300,
+  "track_apsides": true
+}
