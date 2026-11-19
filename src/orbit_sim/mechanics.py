@@ -49,9 +49,16 @@ class OrbitalElements:
     true_anomaly_deg: float | None
 
 
+def _cross(left: Array, right: Array) -> Array:
+    # These vectors always have three components, so no axis or broadcast handling is needed.
+    x, y, z = left
+    a, b, c = right
+    return np.array((y * c - z * b, z * a - x * c, x * b - y * a))
+
+
 def _oriented_angle(start: Array, end: Array, normal: Array) -> float:
     # atan2 preserves the quadrant and behaves well near zero and 180 degrees.
-    return degrees(atan2(np.cross(start, end) @ normal, start @ end)) % 360
+    return degrees(atan2(_cross(start, end) @ normal, start @ end)) % 360
 
 
 def orbital_elements(state: State) -> OrbitalElements:
@@ -64,9 +71,9 @@ def _orbital_elements(state: Array) -> OrbitalElements:
     radius = hypot(*position)
     if radius == 0:
         raise ValueError("orbital elements require a nonzero position")
-    momentum = np.cross(position, velocity)
+    momentum = _cross(position, velocity)
     momentum_norm = hypot(*momentum)
-    eccentricity_vector = np.cross(velocity, momentum) / EARTH_MU_KM3_S2 - position / radius
+    eccentricity_vector = _cross(velocity, momentum) / EARTH_MU_KM3_S2 - position / radius
     eccentricity = hypot(*eccentricity_vector)
     inverse_axis = 2 / radius - (velocity @ velocity) / EARTH_MU_KM3_S2
     axis = None if abs(inverse_axis * radius) < _ELEMENT_EPSILON else float(1 / inverse_axis)

@@ -4,7 +4,7 @@ import argparse
 import csv
 import os
 import sys
-from dataclasses import astuple, fields
+from dataclasses import fields
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -13,10 +13,11 @@ from .mission import Mission
 from .plan import load_mission
 from .propagation import SimulationError, propagate
 
+_ELEMENT_COLUMNS = tuple(field.name for field in fields(OrbitalElements))
 _HEADER = (
     "time_s", "kind", "x_km", "y_km", "z_km", "vx_km_s", "vy_km_s", "vz_km_s",
     "altitude_km", "speed_km_s", "specific_energy_km2_s2", "mass_kg",
-    *(field.name for field in fields(OrbitalElements)),
+    *_ELEMENT_COLUMNS,
 )
 
 
@@ -34,7 +35,7 @@ def _write_telemetry(mission: Mission, destination: Path) -> tuple[int, str]:
                 writer.writerow((
                     sample.time_s, sample.kind, *sample.state.position_km, *sample.state.velocity_km_s,
                     sample.altitude_km, sample.speed_km_s, sample.specific_energy_km2_s2, sample.mass_kg,
-                    *astuple(sample.elements),
+                    *(getattr(sample.elements, name) for name in _ELEMENT_COLUMNS),
                 ))
                 count += 1
                 outcome = sample.kind

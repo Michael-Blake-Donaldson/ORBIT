@@ -9,7 +9,7 @@ import numpy as np
 from scipy.integrate import DOP853, DenseOutput
 from scipy.optimize import brentq
 
-from .mechanics import Array, OrbitalElements, _dynamics, _orbital_elements, _specific_energy
+from .mechanics import Array, OrbitalElements, _cross, _dynamics, _orbital_elements, _specific_energy
 from .mission import EARTH_RADIUS_KM, STANDARD_GRAVITY_KM_S2, Impulse, Mission, State
 
 SampleKind = Literal["sample", "pre_burn", "post_burn", "complete", "impact"]
@@ -40,19 +40,27 @@ def _radial_motion(state: Array) -> float:
     return float(state[:3] @ state[3:])
 
 
-def _impact_time(start: float, initial: Array, solver: DOP853, dense: DenseOutput) -> float | None:
-    def altitude_at(time: float) -> float:
-        return _altitude(dense(time))
+def _impact_time(
+    start: float, initial: Array, end: float, final: Array, dense: DenseOutput, crossed_surface: bool,
+) -> float | None:
+    def state_at(time: float) -> Array:
+        # Use the accepted states to preserve the root bracket at floating-point endpoints.
+        if time == start:
+            return initial
+        if time == end:
+            return final
+        return dense(time)
 
-    end = solver.t
-    if _altitude(solver.y) <= 0:
+    def altitude_at(time: float) -> float:
+        return _altitude(state_at(time))
+
+    if crossed_surface:
         return brentq(altitude_at, start, end, xtol=1e-9)
 
     # Check the in-step periapsis for a shallow crossing with both endpoints above ground.
-    if _radial_motion(initial) < 0 < _radial_motion(solver.y):
-        periapsis_time = brentq(lambda time: _radial_motion(dense(time)), start, end, xtol=1e-9)
-        if altitude_at(periapsis_time) <= 0:
-            return brentq(altitude_at, start, periapsis_time, xtol=1e-9)
+    periapsis_time = brentq(lambda time: _radial_motion(state_at(time)), start, end, xtol=1e-9)
+    if altitude_at(periapsis_time) <= 0:
+        return brentq(altitude_at, start, periapsis_time, xtol=1e-9)
     return None
 
 
@@ -61,12 +69,12 @@ def _apply_impulse(state: Array, impulse: Impulse) -> Array:
     if impulse.frame == "RTN":
         position, velocity = state[:3], state[3:]
         radial = position / hypot(*position)
-        normal = np.cross(radial, velocity)
+        normal = _cross(radial, velocity)
         norm = hypot(*normal)
         if norm <= 1e-10 * hypot(*velocity):
             raise SimulationError("RTN burn requires a non-radial pre-burn state")
         normal /= norm
-        transverse = np.cross(normal, radial)
+        transverse = _cross(normal, radial)
         delta_v = delta_v[0] * radial + delta_v[1] * transverse + delta_v[2] * normal
     result = state.copy()
     result[3:] += delta_v
@@ -116,24 +124,29 @@ def propagate(mission: Mission) -> Iterator[Sample]:
                 if accepted_steps >= _MAX_ACCEPTED_STEPS:
                     raise SimulationError("adaptive integration exceeded the accepted step limit")
                 start, initial = solver.t, solver.y
+                # Keep fast inbound trajectories from stepping through the gravity singularity.
+                transit_limit = 0.5 * hypot(*initial[:3]) / max(hypot(*initial[3:]), 1e-12)
+                solver.max_step = min(config.max_step_s, transit_limit)
                 message = solver.step()
                 if solver.status == "failed":
                     raise SimulationError(f"integration failed near t={start:g} s: {message}")
                 accepted_steps += 1
-                dense = solver.dense_output()
-                impact = _impact_time(start, initial, solver, dense)
+                dense = None
+                impact = None
+                crossed_surface = _altitude(solver.y) <= 0
+                if crossed_surface or _radial_motion(initial) < 0 < _radial_motion(solver.y):
+                    dense = solver.dense_output()
+                    impact = _impact_time(start, initial, solver.t, solver.y, dense, crossed_surface)
                 hard_stop = impact if impact is not None else boundary
                 cadence = cadence_index * mission.sample_interval_s
                 while cadence <= solver.t and cadence < hard_stop and not _same_time(cadence, hard_stop):
+                    if dense is None:
+                        dense = solver.dense_output()
                     yield _sample(cadence, "sample", dense(cadence), j2, mass)
                     cadence_index += 1
                     cadence = cadence_index * mission.sample_interval_s
-                if impact is not None:
-                    if _same_time(impact, start):
-                        hit_state = initial
-                    else:
-                        hit_state = dense(impact)
-                    yield _sample(impact, "impact", hit_state, j2, mass)
+                if impact is not None and dense is not None:
+                    yield _sample(impact, "impact", dense(impact), j2, mass)
                     return
             time, state = solver.t, solver.y
 
