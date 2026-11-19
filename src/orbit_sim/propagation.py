@@ -12,14 +12,16 @@ from scipy.optimize import brentq
 from .mechanics import (
     Array,
     OrbitalElements,
+    _altitude,
     _cross,
+    _drag_acceleration,
     _dynamics,
     _orbital_elements,
     _specific_energy,
 )
 from .mission import (
-    EARTH_RADIUS_KM,
     STANDARD_GRAVITY_KM_S2,
+    AtmosphericDrag,
     FiniteBurn,
     Impulse,
     Mission,
@@ -62,17 +64,27 @@ class _ThrustArc:
     def mass_at(self, time: float) -> float:
         return self.initial_mass_kg - self.flow_kg_s * (time - self.burn.start_s)
 
-    def dynamics(self, gravity: Callable[[float, Array], Array]) -> Callable[[float, Array], Array]:
-        newtons = np.array(self.burn.thrust_n)
 
-        def accelerated(time: float, state: Array) -> Array:
-            derivative = gravity(time, state)
-            thrust = _inertial_vector(newtons, self.burn.frame, state)
+def _segment_dynamics(
+    gravity: Callable[[float, Array], Array], drag: AtmosphericDrag | None, coast_mass: float | None,
+    arc: _ThrustArc | None,
+) -> Callable[[float, Array], Array]:
+    if coast_mass is None or (drag is None and arc is None):
+        return gravity
+    newtons = np.array(arc.burn.thrust_n) if arc is not None else None
+
+    def accelerated(time: float, state: Array) -> Array:
+        derivative = gravity(time, state)
+        mass = coast_mass if arc is None else arc.mass_at(time)
+        if drag is not None:
+            derivative[3:] += _drag_acceleration(state, drag, mass)
+        if arc is not None and newtons is not None:
+            thrust = _inertial_vector(newtons, arc.burn.frame, state)
             # Newtons divided by kilograms give m/s². The integrator uses kilometres.
-            derivative[3:] += thrust / (1000 * self.mass_at(time))
-            return derivative
+            derivative[3:] += thrust / (1000 * mass)
+        return derivative
 
-        return accelerated
+    return accelerated
 
 
 def _schedule(mission: Mission) -> dict[float, _Boundary]:
@@ -83,10 +95,6 @@ def _schedule(mission: Mission) -> dict[float, _Boundary]:
     for impulse in mission.impulses:
         boundaries.setdefault(impulse.time_s, _Boundary()).impulse = impulse
     return boundaries
-
-
-def _altitude(state: Array) -> float:
-    return hypot(*state[:3]) - EARTH_RADIUS_KM
 
 
 def _radial_motion(state: Array) -> float:
@@ -168,7 +176,7 @@ def propagate(mission: Mission) -> Iterator[Sample]:
     for boundary, events in sorted(boundaries.items()):
         if time < boundary:
             solver = DOP853(
-                dynamics if arc is None else arc.dynamics(dynamics), time, state, boundary,
+                _segment_dynamics(dynamics, mission.drag, mass, arc), time, state, boundary,
                 rtol=config.relative_tolerance,
                 atol=absolute_tolerance, max_step=config.max_step_s,
             )

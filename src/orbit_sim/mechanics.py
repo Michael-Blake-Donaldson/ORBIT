@@ -1,12 +1,20 @@
 """Earth gravity and osculating Keplerian elements in the inertial frame."""
 
 from dataclasses import dataclass
-from math import atan2, cos, degrees, hypot, radians, sin, sqrt
+from math import atan2, cos, degrees, exp, hypot, radians, sin, sqrt
 
 import numpy as np
 from numpy.typing import NDArray
 
-from .mission import EARTH_J2, EARTH_MU_KM3_S2, EARTH_RADIUS_KM, KeplerianOrbit, State
+from .mission import (
+    EARTH_J2,
+    EARTH_MU_KM3_S2,
+    EARTH_RADIUS_KM,
+    EARTH_ROTATION_RAD_S,
+    AtmosphericDrag,
+    KeplerianOrbit,
+    State,
+)
 
 Array = NDArray[np.float64]
 _J2_FACTOR = 1.5 * EARTH_J2 * EARTH_MU_KM3_S2 * EARTH_RADIUS_KM**2
@@ -37,6 +45,20 @@ def _specific_energy(state: Array, include_j2: bool) -> float:
         legendre_p2 = (3 * (position[2] / radius)**2 - 1) / 2
         potential *= 1 - EARTH_J2 * (EARTH_RADIUS_KM / radius)**2 * legendre_p2
     return float(velocity @ velocity / 2 + potential)
+
+
+def _altitude(state: Array) -> float:
+    return hypot(*state[:3]) - EARTH_RADIUS_KM
+
+
+def _drag_acceleration(state: Array, drag: AtmosphericDrag, mass_kg: float) -> Array:
+    x, y, _, vx, vy, vz = state
+    relative = (vx + EARTH_ROTATION_RAD_S * y, vy - EARTH_ROTATION_RAD_S * x, vz)
+    excess_altitude = max(0.0, _altitude(state) - drag.reference_altitude_km)
+    density = drag.reference_density_kg_m3 * exp(-excess_altitude / drag.scale_height_km)
+    # The speed factor uses m/s with SI density and area. The vector retains km/s.
+    inverse_time = -0.5 * density * drag.coefficient * drag.area_m2 * (1000 * hypot(*relative)) / mass_kg
+    return np.array(relative) * inverse_time
 
 
 @dataclass(frozen=True, slots=True)

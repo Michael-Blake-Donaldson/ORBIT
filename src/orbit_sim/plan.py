@@ -7,6 +7,7 @@ from typing import TypeVar
 
 from .mechanics import state_from_keplerian
 from .mission import (
+    AtmosphericDrag,
     FiniteBurn,
     Impulse,
     Integrator,
@@ -17,7 +18,7 @@ from .mission import (
 )
 
 _MAX_PLAN_BYTES = 256 * 1024
-_Config = TypeVar("_Config", FiniteBurn, Impulse, Integrator, KeplerianOrbit, Mission, Spacecraft, State)
+_Config = TypeVar("_Config", AtmosphericDrag, FiniteBurn, Impulse, Integrator, KeplerianOrbit, Mission, Spacecraft, State)
 
 
 def _unique_object(items: list[tuple[str, object]]) -> dict[str, object]:
@@ -83,4 +84,6 @@ def load_mission(path: str | Path) -> Mission:
         values["spacecraft"] = _construct(Spacecraft, values["spacecraft"])
     if "integrator" in values:
         values["integrator"] = _construct(Integrator, values["integrator"])
+    if "drag" in values:
+        values["drag"] = _construct(AtmosphericDrag, values["drag"])
     return _construct(Mission, values)

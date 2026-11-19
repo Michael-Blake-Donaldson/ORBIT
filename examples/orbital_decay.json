@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "initial_orbit": {
+    "periapsis_radius_km": 6778.137,
+    "eccentricity": 0
+  },
+  "duration_s": 86400,
+  "sample_interval_s": 60,
+  "spacecraft": {
+    "initial_mass_kg": 100,
+    "dry_mass_kg": 100,
+    "isp_s": 320
+  },
+  "drag": {
+    "reference_altitude_km": 300,
+    "reference_density_kg_m3": 2e-11,
+    "scale_height_km": 55,
+    "area_m2": 4,
+    "coefficient": 2.2
+  }
+}

@@ -34,6 +34,7 @@ uv run --locked python -m orbit_sim examples/j2_precession.json output/j2.csv
 | [Hohmann transfer](examples/hohmann.json) | Two prograde burns raise a circular orbit from 7,000 km to 12,000 km geocentric radius. Final mass is about 572.35 kg. |
 | [J₂ nodal regression](examples/j2_precession.json) | A 55° inclined orbit regresses by about 4.1° per day. RAAN wraps through 360°. |
 | [Finite prograde burn](examples/finite_burn.json) | A 1,500 N transverse burn from 600 to 720 s raises the orbit and consumes about 57.36 kg. |
+| [Orbital decay](examples/orbital_decay.json) | The configured drag model lowers the semi-major axis of a 400 km orbit by about 1.13 km in one day. |
 
 ## Replay telemetry in JavaFX
 
@@ -80,6 +81,7 @@ Optional fields:
 | `impulses` | Objects with `time_s`, `delta_v_km_s`, and optional `frame` (`ECI` by default or `RTN`). Times must increase strictly and may include both endpoints. |
 | `finite_burns` | Objects with `start_s`, `end_s`, `thrust_n`, and optional `frame` (`ECI` by default or `RTN`). Each burn lasts at least 1 ms. Windows must be ordered, nonoverlapping, and within the mission. |
 | `spacecraft` | `initial_mass_kg`, `dry_mass_kg`, and `isp_s`. Required for finite burns and optional for impulsive propellant accounting. |
+| `drag` | Optional local atmosphere with `reference_altitude_km`, `reference_density_kg_m3`, `scale_height_km`, `area_m2`, and `coefficient` (default `2.2`). Requires spacecraft mass. |
 | `integrator` | Optional overrides for `relative_tolerance` (default `1e-11`), `position_tolerance_km` (`1e-8`), `velocity_tolerance_km_s` (`1e-11`), and `max_step_s` (`120`). |
 
 `initial_state` uses three-component ECI arrays `position_km` and
@@ -107,6 +109,14 @@ the available propellant at ignition. If contact occurs during a burn,
 impact telemetry reports the mass at contact. The mission supports up to
 1,000 maneuvers, and impulses can share a burn endpoint. [NASA astrodynamics modeling reference](https://ntrs.nasa.gov/citations/20220014814)
 
+Atmospheric drag uses a rigidly co-rotating atmosphere and a constant
+effective area. Density falls exponentially above the reference altitude
+and stays at the reference density below it. The force opposes the
+air-relative velocity and uses the spacecraft mass at each integration
+time. This local density model is intended for sensitivity studies around
+the chosen altitude. Space weather, winds, and reentry aerodynamics require
+a higher-fidelity atmosphere. [NASA orbital drag model](https://ilrs.gsfc.nasa.gov/docs/ANDE_AAS_07-265.pdf)
+
 ## Telemetry and model
 
 - The CSV includes elapsed time, row kind, ECI Cartesian state, spherical
@@ -128,9 +138,10 @@ impact telemetry reports the mass at contact. The mission supports up to
   dense interpolation supplies telemetry and brackets surface contact.
   Tolerances control local integration error. See the tests for measured
   trajectory error on the reference cases. [SciPy DOP853](https://docs.scipy.org/doc/scipy/reference/generated/scipy.integrate.DOP853.html)
-- This model covers point-mass and J₂ gravity with impulsive and constant-magnitude finite thrust.
-  Atmospheric drag, third-body gravity, higher harmonics, Earth orientation
-  data, and actuator transients are outside its fidelity.
+- The force model includes point-mass and J₂ gravity, impulsive and
+  constant-magnitude finite thrust, and optional exponential drag.
+  Higher-fidelity analysis requires third-body gravity, higher harmonics,
+  Earth orientation data, and actuator transients when applicable.
 
 The Java controller launches a caller-selected, trusted Python executable
 without a shell. It accepts valid terminal telemetry from a successful worker
@@ -178,7 +189,8 @@ parabolic, and hyperbolic conics at initialization and after 9,000 s.
 The J₂ test compares
 fitted RAAN drift to NASA's first-order secular model and checks conservation
 of energy and axial angular momentum. The shallow-impact test uses the
-analytic Kepler time of the first surface crossing. Java integration tests run
+analytic Kepler time of the first surface crossing. The drag test compares
+one-day circular decay against the first-order work-energy estimate. Java integration tests run
 when the controller JAR and Java are available. [NASA trajectories](https://science.nasa.gov/learn/basics-of-space-flight/chapter4-1/)
 [NASA nodal precession](https://science.nasa.gov/wp-content/uploads/2023/05/GDC_OrbitPrimer.pdf)
 

@@ -6,6 +6,7 @@ from math import ceil, hypot
 EARTH_MU_KM3_S2 = 398600.4418
 EARTH_RADIUS_KM = 6378.137
 EARTH_J2 = 1.08262982131e-3
+EARTH_ROTATION_RAD_S = 7.292115e-5
 STANDARD_GRAVITY_KM_S2 = 0.00980665
 MAX_SAMPLES = 100_000
 
@@ -106,6 +107,27 @@ class Spacecraft:
 
 
 @dataclass(frozen=True, slots=True)
+class AtmosphericDrag:
+    """Local exponential atmosphere and a constant effective drag area."""
+
+    reference_altitude_km: float
+    reference_density_kg_m3: float
+    scale_height_km: float
+    area_m2: float
+    coefficient: float = 2.2
+
+    def __post_init__(self) -> None:
+        for field, low, high in (
+            ("reference_altitude_km", 100, 2000),
+            ("reference_density_kg_m3", 1e-20, 1e-4),
+            ("scale_height_km", 1, 1000),
+            ("area_m2", 1e-6, 1e4),
+            ("coefficient", 1e-3, 10),
+        ):
+            object.__setattr__(self, field, number(getattr(self, field), field, low, high))
+
+
+@dataclass(frozen=True, slots=True)
 class Integrator:
     relative_tolerance: float = 1e-11
     position_tolerance_km: float = 1e-8
@@ -132,6 +154,7 @@ class Mission:
     spacecraft: Spacecraft | None = None
     integrator: Integrator = Integrator()
     finite_burns: tuple[FiniteBurn, ...] = ()
+    drag: AtmosphericDrag | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.initial_state, State):
@@ -144,6 +167,10 @@ class Mission:
             raise TypeError("integrator must be an Integrator")
         if self.spacecraft is not None and not isinstance(self.spacecraft, Spacecraft):
             raise TypeError("spacecraft must be a Spacecraft")
+        if self.drag is not None and not isinstance(self.drag, AtmosphericDrag):
+            raise TypeError("drag must be an AtmosphericDrag")
+        if self.drag is not None and self.spacecraft is None:
+            raise ValueError("atmospheric drag requires spacecraft mass")
         if self.gravity not in ("point_mass", "j2"):
             raise ValueError("gravity must be point_mass or j2")
 
