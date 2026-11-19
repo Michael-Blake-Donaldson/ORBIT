@@ -35,6 +35,7 @@ uv run --locked python -m orbit_sim examples/j2_precession.json output/j2.csv
 | [J₂ nodal regression](examples/j2_precession.json) | A 55° inclined orbit regresses by about 4.1° per day. RAAN wraps through 360°. |
 | [Finite prograde burn](examples/finite_burn.json) | A 1,500 N transverse burn from 600 to 720 s raises the orbit and consumes about 57.36 kg. |
 | [Orbital decay](examples/orbital_decay.json) | The configured drag model lowers the semi-major axis of a 400 km orbit by about 1.13 km in one day. |
+| [Tracked ellipse](examples/apsides.json) | Periapsis and apoapsis appear as event rows between 300 s cadence samples. |
 
 ## Replay telemetry in JavaFX
 
@@ -50,6 +51,7 @@ Earth. The altitude chart and sample inspector follow playback and scrubbing.
 Select an impulse in **Mission events** to inspect the post-burn state, then
 step back one row to compare the pre-burn state at the same timestamp.
 Finite burns show separate ignition and cutoff markers.
+When enabled, coast-phase periapsis and apoapsis also appear in **Mission events**.
 
 You can also open a file at launch. The Maven plugin resolves relative paths
 from the `viewer` directory:
@@ -82,6 +84,7 @@ Optional fields:
 | `finite_burns` | Objects with `start_s`, `end_s`, `thrust_n`, and optional `frame` (`ECI` by default or `RTN`). Each burn lasts at least 1 ms. Windows must be ordered, nonoverlapping, and within the mission. |
 | `spacecraft` | `initial_mass_kg`, `dry_mass_kg`, and `isp_s`. Required for finite burns and optional for impulsive propellant accounting. |
 | `drag` | Optional local atmosphere with `reference_altitude_km`, `reference_density_kg_m3`, `scale_height_km`, `area_m2`, and `coefficient` (default `2.2`). Requires spacecraft mass. |
+| `track_apsides` | Boolean, default `false`. Detect distinct radial turning points during coasts and add `periapsis` and `apoapsis` rows. |
 | `integrator` | Optional overrides for `relative_tolerance` (default `1e-11`), `position_tolerance_km` (`1e-8`), `velocity_tolerance_km_s` (`1e-11`), and `max_step_s` (`120`). |
 
 `initial_state` uses three-component ECI arrays `position_km` and
@@ -129,6 +132,9 @@ a higher-fidelity atmosphere. [NASA orbital drag model](https://ilrs.gsfc.nasa.g
   then mission completion where applicable. Event rows replace a cadence
   row at the same timestamp. Earth contact terminates the simulation with
   an `impact` row. Both `complete` and `impact` are successful simulation outcomes.
+- With apsis tracking enabled, the solver locates radial turning points
+  between samples. Effectively circular motion and roots at segment
+  endpoints are omitted. The telemetry row limit also applies to events.
 - The model uses WGS 84 nominal Earth constants. J₂ mode applies only the
   leading zonal harmonic and reports energy including its contribution to
   the potential. The elements are instantaneous two-body elements in either
@@ -197,6 +203,10 @@ when the controller JAR and Java are available. [NASA trajectories](https://scie
 The profiling command reports median runtime and rows per second after a
 warm-up. It measures the numerical engine and telemetry construction,
 excluding imports, file I/O, and Java process startup.
+
+The [GitHub Actions workflow](.github/workflows/verify.yml) builds both Java
+modules and runs the tests on Ubuntu with Python 3.11 and Java 17, and on
+Windows with Python 3.12 and Java 25.
 
 On the Windows development machine with Python 3.12, the one-day J₂ example
 produced 2,881 rows. Across 11 runs, the median dropped from 0.755 s to

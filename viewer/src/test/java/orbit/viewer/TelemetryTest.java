@@ -65,6 +65,16 @@ class TelemetryTest {
     }
 
     @Test
+    void indexesApsidesBetweenCadenceRows() throws IOException {
+        Telemetry.Flight flight = Telemetry.load(write(
+                row(0, "sample") + row(5.1, "apoapsis") + row(6, "sample")
+                        + row(12.8, "periapsis") + row(15, "complete")));
+        assertEquals(java.util.List.of(1, 3, 4), flight.events());
+        assertEquals(1, flight.rowAt(5.2));
+        assertEquals(Telemetry.Kind.PERIAPSIS, flight.rows().get(3).kind());
+    }
+
+    @Test
     void rejectsMalformedOrNonfiniteNumbersAndOversizedRows() throws IOException {
         assertThrows(IOException.class, () -> Telemetry.load(write("0,sample\n")));
         String invalid = row(0, "sample").replace("7000", "NaN");

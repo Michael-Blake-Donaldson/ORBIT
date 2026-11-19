@@ -22,7 +22,8 @@ final class Telemetry {
 
     enum Kind {
         SAMPLE("Sample"), BURN_END("Burn cutoff"), PRE_BURN("Pre-burn"), POST_BURN("Post-burn"),
-        BURN_START("Burn ignition"), COMPLETE("Complete"), IMPACT("Impact");
+        BURN_START("Burn ignition"), PERIAPSIS("Periapsis"), APOAPSIS("Apoapsis"),
+        COMPLETE("Complete"), IMPACT("Impact");
 
         private final String label;
 
@@ -42,6 +43,10 @@ final class Telemetry {
             return this == POST_BURN || this == BURN_START || this == BURN_END;
         }
 
+        boolean apsis() {
+            return this == PERIAPSIS || this == APOAPSIS;
+        }
+
         static Kind parse(String value) {
             return switch (value) {
                 case "sample" -> SAMPLE;
@@ -49,6 +54,8 @@ final class Telemetry {
                 case "post_burn" -> POST_BURN;
                 case "burn_start" -> BURN_START;
                 case "burn_end" -> BURN_END;
+                case "periapsis" -> PERIAPSIS;
+                case "apoapsis" -> APOAPSIS;
                 case "complete" -> COMPLETE;
                 case "impact" -> IMPACT;
                 default -> throw new IllegalArgumentException("unknown row kind");
@@ -123,7 +130,7 @@ final class Telemetry {
                 if (row.kind().maneuverEvent()) {
                     burning = row.kind() == Kind.BURN_START;
                 }
-                if (row.kind().maneuverEvent() || row.kind().terminal()) {
+                if (row.kind().maneuverEvent() || row.kind().apsis() || row.kind().terminal()) {
                     events.add(rows.size());
                 }
                 rows.add(row);

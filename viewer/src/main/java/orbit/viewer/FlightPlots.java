@@ -19,6 +19,7 @@ final class FlightPlots {
     private static final Color MUTED = Color.web("#91a6bf");
     private static final Color TEAL = Color.web("#52dfcd");
     private static final Color AMBER = Color.web("#ffc47b");
+    private static final Color APSIS = Color.web("#bcaaff");
     private static final Color IMPACT = Color.web("#fd8792");
     private static final Color FUTURE = Color.web("#617d9b");
     private static final Font CAPTION = Font.font("Monospaced", 11);
@@ -144,6 +145,8 @@ final class FlightPlots {
                     Telemetry.Sample row = flight.rows().get(event);
                     if (row.kind().maneuverEvent()) {
                         dot(g, x(row, cx, scale), y(row, cy, scale), 4, AMBER, BACKGROUND);
+                    } else if (row.kind().apsis()) {
+                        dot(g, x(row, cx, scale), y(row, cy, scale), 4, APSIS, BACKGROUND);
                     }
                 }
                 Telemetry.Sample row = flight.rows().get(selected);

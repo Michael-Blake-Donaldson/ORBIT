@@ -98,6 +98,7 @@
 .spacecraft-color { -fx-text-fill: #52dfcd; }
 .planned-color { -fx-text-fill: #8da8c4; }
 .burn-color { -fx-text-fill: #ffc47b; }
+.apsis-color { -fx-text-fill: #bcaaff; }
 .impact-color { -fx-text-fill: #fd8792; }
 
 .sample-time {

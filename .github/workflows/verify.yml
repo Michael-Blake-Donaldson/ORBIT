@@ -1,0 +1,58 @@
+name: Verify ORBIT
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: ${{ matrix.os }} · Python ${{ matrix.python }} · Java ${{ matrix.java }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            python: "3.11"
+            java: "17"
+          - os: windows-2025
+            python: "3.12"
+            java: "25"
+    env:
+      UV_PYTHON: ${{ matrix.python }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.13.5"
+          enable-cache: false
+
+      - name: Install the locked Python environment
+        run: uv sync --locked --managed-python
+
+      - name: Build the Java controller
+        run: mvn --batch-mode --no-transfer-progress -f controller/pom.xml verify
+
+      - name: Verify the JavaFX viewer
+        run: mvn --batch-mode --no-transfer-progress -f viewer/pom.xml verify
+
+      - name: Verify physics and controller integration
+        run: uv run --locked --managed-python python -m unittest discover -s tests -v

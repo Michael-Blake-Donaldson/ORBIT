@@ -151,7 +151,7 @@ public final class OrbitViewer extends Application {
         heading.setAlignment(Pos.CENTER_LEFT);
         HBox legend = new HBox(19, legend("●", "Spacecraft", "spacecraft-color"),
                 legend("━", "Flown path", "spacecraft-color"), legend("━", "Remaining path", "planned-color"),
-                legend("○", "Burn", "burn-color"));
+                legend("○", "Burn", "burn-color"), legend("○", "Apsis", "apsis-color"));
         legend.getStyleClass().add("legend");
         VBox panel = new VBox(heading, trajectory, legend);
         panel.getStyleClass().add("panel");
@@ -417,6 +417,7 @@ public final class OrbitViewer extends Application {
     private static String eventColor(Telemetry.Kind kind) {
         return switch (kind) {
             case POST_BURN, BURN_START, BURN_END -> "burn-color";
+            case PERIAPSIS, APOAPSIS -> "apsis-color";
             case IMPACT -> "impact-color";
             default -> "spacecraft-color";
         };
