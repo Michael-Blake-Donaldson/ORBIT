@@ -5,10 +5,10 @@ from dataclasses import fields
 from pathlib import Path
 from typing import TypeVar
 
-from .mission import Impulse, Integrator, Mission, Spacecraft, State
+from .mission import FiniteBurn, Impulse, Integrator, Mission, Spacecraft, State
 
 _MAX_PLAN_BYTES = 256 * 1024
-_Config = TypeVar("_Config", Impulse, Integrator, Mission, Spacecraft, State)
+_Config = TypeVar("_Config", FiniteBurn, Impulse, Integrator, Mission, Spacecraft, State)
 
 
 def _unique_object(items: list[tuple[str, object]]) -> dict[str, object]:
@@ -60,6 +60,11 @@ def load_mission(path: str | Path) -> Mission:
         if not isinstance(impulses, list) or len(impulses) > 1000:
             raise ValueError("impulses must be an array with at most 1000 entries")
         values["impulses"] = tuple(_construct(Impulse, impulse) for impulse in impulses)
+    if "finite_burns" in values:
+        burns = values["finite_burns"]
+        if not isinstance(burns, list) or len(burns) > 1000:
+            raise ValueError("finite_burns must be an array with at most 1000 entries")
+        values["finite_burns"] = tuple(_construct(FiniteBurn, burn) for burn in burns)
     if "spacecraft" in values:
         values["spacecraft"] = _construct(Spacecraft, values["spacecraft"])
     if "integrator" in values:

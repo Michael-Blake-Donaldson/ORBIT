@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "initial_state": {
+    "position_km": [7000, 0, 0],
+    "velocity_km_s": [0, 7.546053290107541, 0]
+  },
+  "duration_s": 7200,
+  "sample_interval_s": 20,
+  "spacecraft": {
+    "initial_mass_kg": 1000,
+    "dry_mass_kg": 450,
+    "isp_s": 320
+  },
+  "finite_burns": [
+    {"start_s": 600, "end_s": 720, "thrust_n": [0, 1500, 0], "frame": "RTN"}
+  ]
+}

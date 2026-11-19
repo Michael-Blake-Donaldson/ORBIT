@@ -49,6 +49,27 @@ class Impulse:
 
 
 @dataclass(frozen=True, slots=True)
+class FiniteBurn:
+    start_s: float
+    end_s: float
+    thrust_n: Vector
+    frame: str = "ECI"
+
+    def __post_init__(self) -> None:
+        start = number(self.start_s, "start_s", 0, 2_592_000)
+        end = number(self.end_s, "end_s", 0, 2_592_000)
+        if end < start + 0.001:
+            raise ValueError("finite burn must last at least 0.001 s")
+        thrust = vector(self.thrust_n, "thrust_n", 1e7)
+        number(hypot(*thrust), "thrust magnitude (N)", 1e-9, 1e7)
+        object.__setattr__(self, "start_s", start)
+        object.__setattr__(self, "end_s", end)
+        object.__setattr__(self, "thrust_n", thrust)
+        if self.frame not in ("ECI", "RTN"):
+            raise ValueError("finite burn frame must be ECI or RTN")
+
+
+@dataclass(frozen=True, slots=True)
 class Spacecraft:
     initial_mass_kg: float
     dry_mass_kg: float
@@ -87,6 +108,7 @@ class Mission:
     impulses: tuple[Impulse, ...] = ()
     spacecraft: Spacecraft | None = None
     integrator: Integrator = Integrator()
+    finite_burns: tuple[FiniteBurn, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.initial_state, State):
@@ -118,7 +140,29 @@ class Mission:
             if impulse.time_s <= previous_time or impulse.time_s > duration:
                 raise ValueError("impulse times must be strictly increasing and within the mission")
             previous_time = impulse.time_s
-        if ceil(duration / interval) + 1 + 2 * len(impulses) > MAX_SAMPLES:
+        burns = self._validated_finite_burns(duration, impulses)
+        object.__setattr__(self, "finite_burns", burns)
+        if ceil(duration / interval) + 1 + 2 * (len(impulses) + len(burns)) > MAX_SAMPLES:
             raise ValueError(f"mission exceeds the {MAX_SAMPLES} telemetry row budget")
         if ceil(duration / self.integrator.max_step_s) > 50_000:
             raise ValueError("mission exceeds the integration step budget for the chosen max_step_s")
+
+    def _validated_finite_burns(self, duration: float, impulses: tuple[Impulse, ...]) -> tuple[FiniteBurn, ...]:
+        if not isinstance(self.finite_burns, (tuple, list)) or len(self.finite_burns) + len(impulses) > 1000:
+            raise ValueError("mission must contain at most 1000 maneuvers")
+        burns = tuple(self.finite_burns)
+        if burns and self.spacecraft is None:
+            raise ValueError("finite burns require spacecraft mass and specific impulse")
+        previous_end = 0.0
+        impulse_index = 0
+        for burn in burns:
+            if not isinstance(burn, FiniteBurn):
+                raise TypeError("finite_burns must contain FiniteBurn values")
+            if burn.start_s < previous_end or burn.end_s > duration:
+                raise ValueError("finite burns must be ordered, nonoverlapping, and within the mission")
+            while impulse_index < len(impulses) and impulses[impulse_index].time_s <= burn.start_s:
+                impulse_index += 1
+            if impulse_index < len(impulses) and impulses[impulse_index].time_s < burn.end_s:
+                raise ValueError("an impulse cannot occur inside a finite burn")
+            previous_end = burn.end_s
+        return burns
