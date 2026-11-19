@@ -1,0 +1,215 @@
+.root {
+    -fx-font-family: "System";
+    -fx-font-size: 13px;
+    -fx-background-color: #080f18;
+    -fx-text-background-color: #dce8f4;
+    -fx-focus-color: #52dfcd;
+    -fx-faint-focus-color: rgba(82, 223, 205, 0.22);
+    -fx-base: #162335;
+}
+
+.label {
+    -fx-text-fill: #e8f1fa;
+}
+
+.header {
+    -fx-padding: 16px 21px;
+    -fx-background-color: #0e1824;
+    -fx-border-color: transparent transparent #26364a transparent;
+}
+
+.brand {
+    -fx-font-size: 23px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #52dfcd;
+    -fx-border-color: transparent #314459 transparent transparent;
+    -fx-padding: 1px 15px 1px 0;
+}
+
+.eyebrow, .metric-label {
+    -fx-font-size: 11px;
+    -fx-text-fill: #9eb2ca;
+    -fx-font-weight: bold;
+}
+
+.file-name {
+    -fx-font-size: 15px;
+    -fx-font-weight: bold;
+}
+
+.status {
+    -fx-background-color: #142d34;
+    -fx-background-radius: 20px;
+    -fx-text-fill: #83ead8;
+    -fx-padding: 5px 11px;
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+}
+
+.status:impact, .message {
+    -fx-background-color: #34212d;
+    -fx-text-fill: #ffc1c7;
+}
+
+.message {
+    -fx-padding: 8px 21px;
+    -fx-max-width: infinity;
+}
+
+.workspace {
+    -fx-padding: 15px 18px;
+}
+
+.panel {
+    -fx-background-color: #0e1824;
+    -fx-background-radius: 10px;
+    -fx-border-color: #27384c;
+    -fx-border-radius: 10px;
+    -fx-padding: 1px;
+}
+
+.panel-heading {
+    -fx-padding: 8px 12px;
+}
+
+.panel-title {
+    -fx-font-size: 15px;
+    -fx-font-weight: bold;
+}
+
+.muted {
+    -fx-text-fill: #9eb2ca;
+    -fx-font-size: 12px;
+}
+
+.mono, .metric-value {
+    -fx-font-family: "Monospaced";
+}
+
+.mono {
+    -fx-text-fill: #b7c9dd;
+    -fx-font-size: 12px;
+}
+
+.legend {
+    -fx-padding: 7px 13px;
+}
+
+.spacecraft-color { -fx-text-fill: #52dfcd; }
+.planned-color { -fx-text-fill: #8da8c4; }
+.burn-color { -fx-text-fill: #ffc47b; }
+.impact-color { -fx-text-fill: #fd8792; }
+
+.sample-time {
+    -fx-padding: 0 12px 10px;
+    -fx-font-family: "Monospaced";
+    -fx-font-size: 12px;
+}
+
+.metric-grid {
+    -fx-padding: 0 10px 10px;
+    -fx-hgap: 7px;
+    -fx-vgap: 7px;
+}
+
+.metric {
+    -fx-background-color: #121f30;
+    -fx-background-radius: 6px;
+    -fx-padding: 8px;
+}
+
+.metric-value {
+    -fx-font-size: 13px;
+    -fx-font-weight: bold;
+}
+
+.playback {
+    -fx-padding: 13px 20px;
+    -fx-background-color: #0e1824;
+    -fx-border-color: #26364a transparent transparent transparent;
+}
+
+.button, .combo-box {
+    -fx-background-color: #18283a;
+    -fx-background-radius: 6px;
+    -fx-border-color: #344b63;
+    -fx-border-radius: 6px;
+    -fx-text-fill: #e8f1fa;
+    -fx-padding: 5px 9px;
+    -fx-cursor: hand;
+}
+
+.button:hover, .combo-box:hover {
+    -fx-background-color: #22384d;
+}
+
+.button:focused, .combo-box:focused {
+    -fx-border-color: #52dfcd;
+}
+
+.accent-button {
+    -fx-background-color: #52dfcd;
+    -fx-border-color: #74f3dd;
+    -fx-text-fill: #092324;
+    -fx-font-weight: bold;
+    -fx-min-width: 71px;
+}
+
+.accent-button:hover {
+    -fx-background-color: #86f2e2;
+}
+
+.combo-box .list-cell {
+    -fx-text-fill: #e8f1fa;
+    -fx-padding: 0 3px;
+}
+
+.combo-box-popup .list-cell {
+    -fx-background-color: #18283a;
+    -fx-padding: 6px 9px;
+}
+
+.combo-box-popup .list-cell:hover, .combo-box-popup .list-cell:selected {
+    -fx-background-color: #284156;
+}
+
+.combo-box .arrow {
+    -fx-background-color: #a4bed1;
+}
+
+.slider .track {
+    -fx-background-color: #30455d;
+    -fx-background-radius: 4px;
+    -fx-padding: 3px;
+}
+
+.slider .thumb {
+    -fx-background-color: #52dfcd;
+    -fx-padding: 6px;
+    -fx-cursor: hand;
+}
+
+.slider:focused .thumb {
+    -fx-effect: dropshadow(gaussian, #52dfcd, 7px, 0.4, 0, 0);
+}
+
+.list-view {
+    -fx-background-color: #0e1824;
+    -fx-background-radius: 8px;
+    -fx-padding: 0 6px 6px;
+}
+
+.list-view .list-cell {
+    -fx-background-color: transparent;
+    -fx-padding: 8px;
+}
+
+.list-view .list-cell:filled:hover, .list-view .list-cell:filled:selected {
+    -fx-background-color: #20364a;
+    -fx-background-radius: 6px;
+}
+
+.event-name {
+    -fx-font-weight: bold;
+    -fx-font-size: 12px;
+}
