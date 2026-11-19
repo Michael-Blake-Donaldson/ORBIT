@@ -86,8 +86,11 @@ final class Telemetry {
     private Telemetry() {}
 
     static Flight load(Path path) throws IOException {
-        if (!Files.isRegularFile(path) || Files.size(path) > MAX_BYTES) {
-            throw new IOException("Choose a regular ORBIT CSV file of at most 64 MiB.");
+        if (!Files.isRegularFile(path)) {
+            throw new IOException("The telemetry path does not point to a readable regular file.");
+        }
+        if (Files.size(path) > MAX_BYTES) {
+            throw new IOException("Telemetry exceeds the 64 MiB limit.");
         }
         List<Sample> rows = new ArrayList<>();
         List<Integer> events = new ArrayList<>();

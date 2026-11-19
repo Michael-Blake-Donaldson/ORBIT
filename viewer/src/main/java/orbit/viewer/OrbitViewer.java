@@ -23,6 +23,7 @@ import javafx.scene.control.Tooltip;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyCodeCombination;
 import javafx.scene.input.KeyCombination;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
@@ -240,6 +241,7 @@ public final class OrbitViewer extends Application {
         });
         timeline.setId("mission-timeline");
         timeline.setAccessibleText("Elapsed mission time");
+        timeline.addEventFilter(MouseEvent.MOUSE_PRESSED, ignored -> setPlaying(false));
         timeline.valueProperty().addListener((observable, old, value) -> {
             if (!selectingRow) {
                 seek(value.doubleValue());

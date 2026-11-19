@@ -34,6 +34,31 @@ uv run --locked python -m orbit_sim examples/j2_precession.json output/j2.csv
 | [Hohmann transfer](examples/hohmann.json) | Two prograde burns raise a circular orbit from 7,000 km to 12,000 km geocentric radius. Final mass is about 572.35 kg. |
 | [J₂ nodal regression](examples/j2_precession.json) | A 55° inclined orbit regresses by about 4.1° per day. RAAN wraps through 360°. |
 
+## Replay telemetry in JavaFX
+
+From the repository root, launch the optional desktop viewer:
+
+```powershell
+mvn -f viewer/pom.xml javafx:run
+```
+
+Select **Open CSV…** and choose a telemetry file produced by either CLI.
+Switch between the XY, XZ, and YZ projections to inspect the orbit around
+Earth. The altitude chart and sample inspector follow playback and scrubbing.
+Select a burn in **Mission events** to inspect the post-burn state, then step
+back one row to compare the pre-burn state at the same timestamp.
+
+You can also open a file at launch. The Maven plugin resolves relative paths
+from the `viewer` directory:
+
+```powershell
+mvn -f viewer/pom.xml javafx:run '-Djavafx.args=../output/hohmann.csv'
+```
+
+Playback displays recorded samples and connects them with straight segments
+in the selected projection. Long trajectories use fewer points in the
+plots, while the timeline and inspector retain access to every row.
+
 ## Mission plan
 
 Plans use UTF-8 JSON. The required fields are:
@@ -117,6 +142,7 @@ finishes.
 
 ```powershell
 mvn -f controller/pom.xml package
+mvn -f viewer/pom.xml test
 uv run --locked python -m unittest discover -s tests -v
 uv run --locked python tools/profile_mission.py examples/j2_precession.json --runs 7 --profile
 ```
