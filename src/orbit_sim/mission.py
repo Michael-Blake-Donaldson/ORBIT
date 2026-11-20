@@ -177,8 +177,18 @@ class AtmosphericDrag:
 
 
 @dataclass(frozen=True, slots=True)
+class LoadChange:
+    time_s: float
+    load_w: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "time_s", number(self.time_s, "load change time_s", 0.001, 2_592_000))
+        object.__setattr__(self, "load_w", number(self.load_w, "load_w", 0, 1e8))
+
+
+@dataclass(frozen=True, slots=True)
 class PowerSystem:
-    """Sun-tracking array, constant bus demand, and an energy-limited battery."""
+    """Sun-tracking array, bus demand, and a rate- and energy-limited battery."""
 
     array_power_w_at_1_au: float
     load_w: float
@@ -188,6 +198,9 @@ class PowerSystem:
     discharge_efficiency: float = 1.0
     analysis_interval_s: float = 60.0
     sun_name: str = "Sun"
+    load_changes: tuple[LoadChange, ...] = ()
+    max_charge_w: float | None = None
+    max_discharge_w: float | None = None
 
     def __post_init__(self) -> None:
         capacity = number(self.battery_capacity_wh, "battery_capacity_wh", 0, 1e9)
@@ -203,6 +216,21 @@ class PowerSystem:
             object.__setattr__(self, field, number(getattr(self, field), field, lower, upper))
         if not isinstance(self.sun_name, str) or not 1 <= len(self.sun_name) <= 48 or not self.sun_name.isprintable():
             raise ValueError("sun_name must contain 1 to 48 printable characters")
+        for field in ("max_charge_w", "max_discharge_w"):
+            value = getattr(self, field)
+            if value is not None:
+                object.__setattr__(self, field, number(value, field, 0, 1e8))
+        if not isinstance(self.load_changes, (tuple, list)) or len(self.load_changes) > 1000:
+            raise ValueError("power_system must contain at most 1000 load changes")
+        changes = tuple(self.load_changes)
+        previous = 0.0
+        for change in changes:
+            if not isinstance(change, LoadChange):
+                raise TypeError("load_changes must contain LoadChange values")
+            if change.time_s <= previous:
+                raise ValueError("load change times must increase strictly")
+            previous = change.time_s
+        object.__setattr__(self, "load_changes", changes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,6 +300,8 @@ class Mission:
                 raise TypeError("power_system must be a PowerSystem")
             if not any(body.name.casefold() == self.power_system.sun_name.casefold() for body in bodies):
                 raise ValueError("power_system requires its selected Sun ephemeris in third_bodies")
+            if self.power_system.load_changes and self.power_system.load_changes[-1].time_s > duration:
+                raise ValueError("load changes must be within the mission")
 
         if not isinstance(self.impulses, (tuple, list)) or len(self.impulses) > 1000:
             raise ValueError("impulses must contain at most 1000 entries")

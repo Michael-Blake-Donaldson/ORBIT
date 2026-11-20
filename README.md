@@ -131,12 +131,18 @@ uv run --locked python -m orbit_sim.power_budget examples/solar_eclipses.json ou
 ```
 
 The optional `power_system` block specifies array output at 1 AU
-(`array_power_w_at_1_au`), constant bus demand (`load_w`),
+(`array_power_w_at_1_au`), initial bus demand (`load_w`),
 `battery_capacity_wh`, and `initial_charge_wh`. Optional
 `charge_efficiency` and `discharge_efficiency` default to 1. The array
 tracks the Sun and uses the inverse-square distance law. During partial
 eclipse, it weights the visible part of the Sun by the incidence angle
 of its rays. [NASA spacecraft power reference](https://www.nasa.gov/smallsat-institute/sst-soa/power-subsystems/)
+
+Add `load_changes` with ordered `time_s` and `load_w` entries
+to model operating modes. Each change takes effect at its timestamp
+and is emitted as a CSV row even between solar observations.
+`max_charge_w` and `max_discharge_w` optionally cap battery bus
+power before charge and discharge efficiency are applied.
 
 The power analysis samples the dense trajectory independently of the
 flight telemetry interval. It includes exact eclipse boundaries and
@@ -144,9 +150,8 @@ uses at most one-second spacing in penumbra. Between observations, it
 integrates linearly interpolated power. `analysis_interval_s` defaults
 to 60 seconds. Reduce it for convergence checks. The CSV reports
 instantaneous power, stored charge, and cumulative generated, demanded,
-curtailed, unserved, and lost energy. This model describes energy
-capacity with constant efficiency and unconstrained charge and discharge
-rates.
+curtailed, unserved, and lost energy. The model uses constant conversion
+efficiencies for the battery.
 
 ## Mission plan
 

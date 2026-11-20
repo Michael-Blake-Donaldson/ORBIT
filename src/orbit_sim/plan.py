@@ -16,6 +16,7 @@ from .mission import (
     Impulse,
     Integrator,
     KeplerianOrbit,
+    LoadChange,
     Mission,
     PowerSystem,
     Spacecraft,
@@ -26,7 +27,8 @@ from .mission import (
 _MAX_PLAN_BYTES = 256 * 1024
 _Config = TypeVar(
     "_Config",
-    AtmosphericDrag, EphemerisPoint, FiniteBurn, Impulse, Integrator, KeplerianOrbit, Mission, PowerSystem, Spacecraft, State,
+    AtmosphericDrag, EphemerisPoint, FiniteBurn, Impulse, Integrator, KeplerianOrbit, LoadChange, Mission, PowerSystem,
+    Spacecraft, State,
     ThirdBody,
 )
 
@@ -69,6 +71,15 @@ def _load_third_bodies(value: object) -> tuple[ThirdBody, ...]:
         points = tuple(_construct(EphemerisPoint, entry) for entry in entries)
         bodies.append(_construct(ThirdBody, body | {"ephemeris": points}))
     return tuple(bodies)
+
+
+def _load_power_system(value: object) -> PowerSystem:
+    if not isinstance(value, dict) or "load_changes" not in value:
+        return _construct(PowerSystem, value)
+    changes = value["load_changes"]
+    if not isinstance(changes, list) or len(changes) > 1000:
+        raise ValueError("load_changes must be an array with at most 1000 entries")
+    return _construct(PowerSystem, value | {"load_changes": tuple(_construct(LoadChange, item) for item in changes)})
 
 
 def load_mission(path: str | Path) -> Mission:
@@ -120,5 +131,5 @@ def _parse_mission(values: dict[str, object]) -> Mission:
     if "third_bodies" in values:
         values["third_bodies"] = _load_third_bodies(values["third_bodies"])
     if "power_system" in values:
-        values["power_system"] = _construct(PowerSystem, values["power_system"])
+        values["power_system"] = _load_power_system(values["power_system"])
     return _construct(Mission, values)

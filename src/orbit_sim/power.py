@@ -38,51 +38,91 @@ class PowerSample:
 
 
 @dataclass(slots=True)
-class _Battery:
+class _Ledger:
     charge_wh: float
+    generated_wh: float = 0.0
+    demand_wh: float = 0.0
     curtailed_wh: float = 0.0
     unserved_wh: float = 0.0
     losses_wh: float = 0.0
 
-    def apply(self, net_wh: float, system: PowerSystem) -> None:
-        if net_wh >= 0:
-            stored = min(system.battery_capacity_wh - self.charge_wh, system.charge_efficiency * net_wh)
-            accepted = min(net_wh, stored / system.charge_efficiency)
+    def _apply(self, left_w: float, right_w: float, hours: float, system: PowerSystem) -> None:
+        net_wh = 0.5 * (left_w + right_w) * hours
+        if left_w >= 0 and right_w >= 0:
+            chargeable = min(net_wh, _bounded_energy(left_w, right_w, hours, system.max_charge_w))
+            room = system.battery_capacity_wh - self.charge_wh
+            accepted = min(chargeable, room / system.charge_efficiency)
+            stored = min(room, system.charge_efficiency * accepted)
             self.charge_wh = min(system.battery_capacity_wh, self.charge_wh + stored)
             self.curtailed_wh += net_wh - accepted
             self.losses_wh += accepted - stored
         else:
-            draw = min(self.charge_wh, -net_wh / system.discharge_efficiency)
-            delivered = min(-net_wh, draw * system.discharge_efficiency)
+            supply = min(-net_wh, _bounded_energy(-left_w, -right_w, hours, system.max_discharge_w))
+            delivered = min(supply, self.charge_wh * system.discharge_efficiency)
+            draw = min(self.charge_wh, delivered / system.discharge_efficiency)
             self.charge_wh -= draw
             self.unserved_wh += -net_wh - delivered
             self.losses_wh += draw - delivered
 
+    def advance(self, start_w: float, end_w: float, seconds: float, load_w: float, system: PowerSystem) -> None:
+        hours = seconds / _SECONDS_PER_HOUR
+        self.generated_wh += 0.5 * (start_w + end_w) * hours
+        self.demand_wh += load_w * hours
+        left, right = start_w - load_w, end_w - load_w
+        if left < 0 < right or right < 0 < left:
+            # Capacity clipping is order-dependent when power changes sign.
+            first = hours * abs(left) / (abs(left) + abs(right))
+            self._apply(left, 0, first, system)
+            self._apply(0, right, hours - first, system)
+        else:
+            self._apply(left, right, hours, system)
+
+    def sample(self, time: float, solar: float, load: float) -> PowerSample:
+        return PowerSample(
+            time, solar, load, self.charge_wh, self.generated_wh, self.demand_wh,
+            self.curtailed_wh, self.unserved_wh, self.losses_wh,
+        )
+
+
+def _bounded_energy(left: float, right: float, hours: float, limit: float | None) -> float:
+    """Integrate a nonnegative linear power segment clipped at the bus rate."""
+    if limit is None or max(left, right) <= limit:
+        return 0.5 * (left + right) * hours
+    low, high = min(left, right), max(left, right)
+    if low >= limit:
+        return limit * hours
+    fraction = (limit - low) / (high - low)
+    return (0.5 * (low + limit) * fraction + limit * (1 - fraction)) * hours
+
 
 def battery_budget(samples: Iterable[tuple[float, float]], system: PowerSystem) -> Iterator[PowerSample]:
-    """Integrate ordered (elapsed seconds, available solar watts) at constant load."""
-    battery = _Battery(system.initial_charge_wh)
-    previous_time = previous_solar = generated = 0.0
+    """Integrate ordered (elapsed seconds, available solar watts) and scheduled demand."""
+    ledger = _Ledger(system.initial_charge_wh)
+    previous_time = previous_solar = 0.0
+    load = system.load_w
+    changes = iter(system.load_changes)
+    change = next(changes, None)
     for index, (raw_time, raw_solar) in enumerate(samples):
         time = number(raw_time, "power sample time_s", 0, 2_592_000)
         solar = number(raw_solar, "solar_w", 0, 1e26)
         if (index == 0 and time != 0) or (index > 0 and time <= previous_time):
             raise ValueError("power samples must start at zero and increase strictly")
-        hours = (time - previous_time) / _SECONDS_PER_HOUR
-        if index > 0:
-            generated += 0.5 * (previous_solar + solar) * hours
-            left, right = previous_solar - system.load_w, solar - system.load_w
-            if left * right < 0:
-                # Capacity clipping is order-dependent when the power changes sign.
-                first = hours * abs(left) / (abs(left) + abs(right))
-                battery.apply(0.5 * left * first, system)
-                battery.apply(0.5 * right * (hours - first), system)
-            else:
-                battery.apply(0.5 * (left + right) * hours, system)
-        yield PowerSample(
-            time, solar, system.load_w, battery.charge_wh, generated, system.load_w * time / _SECONDS_PER_HOUR,
-            battery.curtailed_wh, battery.unserved_wh, battery.losses_wh,
-        )
+        if index == 0:
+            previous_solar = solar
+            yield ledger.sample(time, solar, load)
+            continue
+        start, start_solar = previous_time, previous_solar
+        while change is not None and change.time_s <= time:
+            elapsed_fraction = (change.time_s - previous_time) / (time - previous_time)
+            boundary_solar = (1 - elapsed_fraction) * previous_solar + elapsed_fraction * solar
+            ledger.advance(start_solar, boundary_solar, change.time_s - start, load, system)
+            start, start_solar = change.time_s, boundary_solar
+            load = change.load_w
+            yield ledger.sample(start, start_solar, load)
+            change = next(changes, None)
+        if start < time:
+            ledger.advance(start_solar, solar, time - start, load, system)
+            yield ledger.sample(time, solar, load)
         previous_time, previous_solar = time, solar
 
 
@@ -138,4 +178,7 @@ def mission_power_budget(mission: Mission) -> Iterator[PowerSample]:
     system = mission.power_system
     if system is None:
         raise ValueError("mission has no power_system configuration")
-    return battery_budget(_orbital_power_samples(mission, system), system)
+    for count, sample in enumerate(battery_budget(_orbital_power_samples(mission, system), system), 1):
+        if count > MAX_SAMPLES:
+            raise SimulationError("load changes exceed the power analysis row limit")
+        yield sample
