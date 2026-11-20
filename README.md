@@ -37,6 +37,7 @@ uv run --locked python -m orbit_sim examples/j2_precession.json output/j2.csv
 | [Orbital decay](examples/orbital_decay.json) | The configured drag model lowers the semi-major axis of a 400 km orbit by about 1.13 km in one day. |
 | [Tracked ellipse](examples/apsides.json) | Periapsis and apoapsis appear as event rows between 300 s cadence samples. |
 | [Lunar perturbation](examples/lunar_perturbation.json) | The Moon shifts the final position by about 12.14 km versus the same one-day high-orbit case with Earth gravity alone. |
+| [Solar eclipses](examples/solar_eclipses.json) | Two orbits through Earth's shadow, using a DE441 Sun ephemeris. |
 
 ## Replay telemetry in JavaFX
 
@@ -96,6 +97,32 @@ degrees, with optional ellipsoidal height in kilometres. The fixed-spin
 geometry covers mission comparison and planning. Precision tracking requires
 Earth orientation data, and radio coverage requires additional terrain,
 refraction, and link-budget models.
+
+## Analyze solar eclipses
+
+Use a mission with a Sun ephemeris under `third_bodies`. The eclipse command
+locates Earth's shadow boundaries independently of the telemetry cadence.
+It reports partial eclipse as `penumbra`, total eclipse as `umbra`, and
+annular eclipse as `antumbra`. The rows contain elapsed start, end, and
+duration in seconds. [NASA eclipse geometry](https://ntrs.nasa.gov/api/citations/20250006484/downloads/GEONSMSR3_1.pdf)
+
+```powershell
+uv run --locked python -m orbit_sim.eclipses examples/solar_eclipses.json output/solar-eclipse-windows.csv
+uv run --locked python -m orbit_sim.eclipses examples/solar_eclipses.json output/solar-visibility.csv --format samples
+```
+
+The sample export reports the visible fraction of the Sun's apparent
+solid angle, from 0 in total eclipse to 1 in full sunlight. It preserves
+the mission's telemetry timestamps and row kinds. The model uses
+spherical bodies, geometric vectors, and the IAU nominal solar radius of
+695,700 km. The visible fraction measures geometry. Electrical power
+also depends on orientation, irradiance, and array properties.
+[IAU Resolution B3](https://www.iau.org/common/Uploaded%20files/IAUGA2015-Resolution-B3-recommended-nominal-conversion.pdf)
+
+The example uses one-hour geometric Sun vectors from JPL Horizons target
+`10` relative to Earth's center, in ICRF, starting January 1, 2025 at
+00:00 TDB. Import additional epochs with the same workflow as the lunar
+example. `--sun-name` selects a differently named ephemeris.
 
 ## Mission plan
 
@@ -276,6 +303,10 @@ vector also checks the four-hour interpolant between samples.
 Ground geometry tests use PROJ WGS 84 Cartesian and topocentric reference
 vectors. Station access tests compare timing to a closed-form circular orbit
 and cover a sub-two-second window between telemetry rows. [PROJ topocentric conversion](https://proj.org/en/stable/operations/conversions/topocentric.html)
+
+Eclipse tests compare ingress and egress against closed-form common
+tangents, exercise a grazing penumbra and annular eclipse, and check
+visible solar solid angle against a spherical-lens calculation.
 
 The profiling command reports median runtime and rows per second after a
 warm-up. It measures the numerical engine and telemetry construction,

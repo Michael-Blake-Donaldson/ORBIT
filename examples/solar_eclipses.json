@@ -6,7 +6,7 @@
     "eccentricity": 0
   },
   "duration_s": 10800,
-  "sample_interval_s": 300,
+  "sample_interval_s": 5,
   "gravity": "j2",
   "third_bodies": [
     {

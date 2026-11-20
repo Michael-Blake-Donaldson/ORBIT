@@ -16,8 +16,10 @@ from orbit_sim import (
     ThirdBody,
     eclipse_windows,
     load_mission,
+    solar_visibility_fraction,
     state_from_keplerian,
 )
+from orbit_sim.illumination import _visible_fraction
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "solar_eclipses.json"
 _EARTH_RADIUS = 6378.137
@@ -81,6 +83,38 @@ class EclipseTests(unittest.TestCase):
         with self.assertRaisesRegex(SimulationError, "outside Earth"):
             eclipse_windows(replace(lit, third_bodies=(fixed_sun(60, distance_km=100_000),)))
 
+    def test_visible_solid_angle_matches_spherical_lens_and_symmetry(self):
+        earth, solar, separation = 0.85, 0.23, 0.75
+        a = math.acos((math.cos(solar) - math.cos(earth) * math.cos(separation))
+                      / (math.sin(earth) * math.sin(separation)))
+        b = math.acos((math.cos(earth) - math.cos(solar) * math.cos(separation))
+                      / (math.sin(solar) * math.sin(separation)))
+        c = math.acos((math.cos(separation) - math.cos(earth) * math.cos(solar))
+                      / (math.sin(earth) * math.sin(solar)))
+        lens = 2 * (math.pi - c - a * math.cos(earth) - b * math.cos(solar))
+        reference = 1 - lens / (2 * math.pi * (1 - math.cos(solar)))
+        self.assertAlmostEqual(_visible_fraction(earth, solar, separation), reference, places=11)
+        for solar_radius in (0.0046, 1e-9):
+            self.assertAlmostEqual(_visible_fraction(math.pi / 2, solar_radius, math.pi / 2), 0.5, places=11)
+
+        sun = (_AU_KM, 0, 0)
+        self.assertEqual(solar_visibility_fraction((7000, 0, 0), sun), 1)
+        self.assertEqual(solar_visibility_fraction((-7000, 0, 0), sun), 0)
+        offset = 2.1e6
+        earth_angle = math.asin(_EARTH_RADIUS / offset)
+        sun_angle = math.asin(_SOLAR_RADIUS / (_AU_KM + offset))
+        annular = 1 - (1 - math.cos(earth_angle)) / (1 - math.cos(sun_angle))
+        self.assertAlmostEqual(solar_visibility_fraction((-offset, 0, 0), sun), annular, places=10)
+
+    def test_visibility_is_stable_at_floating_point_tangency(self):
+        earth, sun = 0.463028453977212, 0.008117151999964295
+        inner = earth - sun
+        outer = earth + sun
+        self.assertEqual(_visible_fraction(earth, sun, inner), 0)
+        self.assertLessEqual(_visible_fraction(earth, sun, math.nextafter(inner, math.inf)), 1e-11)
+        self.assertGreaterEqual(_visible_fraction(earth, sun, math.nextafter(outer, -math.inf)), 1 - 1e-11)
+        self.assertEqual(_visible_fraction(earth, sun, outer), 1)
+
     def test_horizons_example_and_exclusive_csv_publication(self):
         expected = eclipse_windows(load_mission(EXAMPLE))
         self.assertEqual([window.kind for window in expected], ["penumbra", "umbra", "penumbra"] * 2)
@@ -99,3 +133,26 @@ class EclipseTests(unittest.TestCase):
             result = subprocess.run(command, check=False, capture_output=True, text=True, cwd=directory, timeout=15)
             self.assertEqual(result.returncode, 1)
             self.assertEqual(output.read_bytes(), before)
+
+    def test_sample_csv_agrees_with_eclipse_phases(self):
+        expected = eclipse_windows(load_mission(EXAMPLE))
+        with tempfile.TemporaryDirectory(prefix="orbit visibility & ") as directory:
+            output = Path(directory) / "visibility.csv"
+            command = [sys.executable, "-I", "-m", "orbit_sim.eclipses", str(EXAMPLE), str(output), "--format", "samples"]
+            result = subprocess.run(command, check=False, capture_output=True, text=True, cwd=directory, timeout=15)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with output.open(newline="", encoding="utf-8") as file:
+                rows = list(csv.DictReader(file))
+        self.assertEqual(len(rows), 2161)
+        self.assertEqual(rows[-1]["kind"], "complete")
+        partial_count = 0
+        for row in rows:
+            time = float(row["time_s"])
+            fraction = float(row["visible_solar_fraction"])
+            phase = next((window.kind for window in expected if window.start_s < time < window.end_s), None)
+            if phase == "penumbra":
+                self.assertTrue(0 < fraction < 1)
+                partial_count += 1
+            else:
+                self.assertEqual(fraction, 0 if phase == "umbra" else 1)
+        self.assertGreater(partial_count, 0)
