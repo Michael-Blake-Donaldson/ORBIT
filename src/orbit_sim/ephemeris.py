@@ -19,7 +19,7 @@ def _position_interpolant(body: ThirdBody) -> CubicHermiteSpline:
     )
 
 
-def _relative_acceleration(position: Array, body_position: Array, body: ThirdBody) -> Array:
+def _relative_geometry(position: Array, body_position: Array, body: ThirdBody) -> tuple[Array, float, float]:
     earth_distance = hypot(*body_position)
     if not earth_distance > EARTH_RADIUS_KM:
         raise SimulationError(f"ephemeris for {body.name} is outside its domain or intersects Earth")
@@ -27,7 +27,11 @@ def _relative_acceleration(position: Array, body_position: Array, body: ThirdBod
     distance = hypot(*displacement)
     if distance <= body.minimum_separation_km:
         raise SimulationError(f"spacecraft entered the force exclusion radius of {body.name}")
+    return displacement, distance, earth_distance
 
+
+def _relative_acceleration(position: Array, body_position: Array, body: ThirdBody) -> Array:
+    displacement, distance, earth_distance = _relative_geometry(position, body_position, body)
     mu = body.mu_km3_s2
     if hypot(*position) >= earth_distance / 2:
         return (mu / distance**3) * displacement - (mu / earth_distance**3) * body_position

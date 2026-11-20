@@ -36,6 +36,7 @@ from .mission import (
 from .plan import load_mission
 from .power import PowerSample, battery_budget, mission_power_budget
 from .propagation import Sample, propagate
+from .sensitivity import StateTransition, propagate_state_transition
 from .uncertainty import (
     EnsembleSummary,
     InitialUncertainty,
@@ -68,6 +69,7 @@ __all__ = [
     "SolarSample",
     "Spacecraft",
     "State",
+    "StateTransition",
     "ThirdBody",
     "TrajectoryDelta",
     "TrialOutcome",
@@ -82,6 +84,7 @@ __all__ = [
     "mission_power_budget",
     "orbital_elements",
     "propagate",
+    "propagate_state_transition",
     "run_ensemble",
     "solar_samples",
     "solar_visibility_fraction",

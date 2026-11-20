@@ -1,0 +1,103 @@
+import math
+import unittest
+from dataclasses import replace
+from pathlib import Path
+
+import numpy as np
+
+from orbit_sim import (
+    Impulse,
+    Mission,
+    State,
+    load_mission,
+    propagate,
+    propagate_state_transition,
+)
+from orbit_sim.mission import EARTH_MU_KM3_S2
+
+_INITIAL = State((7000, 0, 0), (0, 7.5, 0))
+_EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
+
+
+def _vector(state):
+    return np.asarray((*state.position_km, *state.velocity_km_s))
+
+
+def _centered_state_difference(mission, perturbation):
+    nominal = _vector(mission.initial_state)
+    endpoints = []
+    for delta in (perturbation, -perturbation):
+        initial = nominal + delta
+        mission_variant = replace(
+            mission, initial_state=State(tuple(map(float, initial[:3])), tuple(map(float, initial[3:]))),
+        )
+        endpoints.append(_vector(list(propagate(mission_variant))[-1].state))
+    return (endpoints[0] - endpoints[1]) / 2
+
+
+class StateTransitionTests(unittest.TestCase):
+    def test_circular_orbit_matches_closed_form_clohessy_wiltshire(self):
+        radius = 7000
+        frequency = math.sqrt(EARTH_MU_KM3_S2 / radius**3)
+        initial = State((radius, 0, 0), (0, radius * frequency, 0))
+        duration = 1620
+        mission = Mission(initial, duration, 73)
+        transitions = list(propagate_state_transition(mission))
+        self.assertEqual([row.sample for row in transitions], list(propagate(mission)))
+        np.testing.assert_array_equal(transitions[0].matrix_eci, np.eye(6))
+
+        angle = frequency * duration
+        sine, cosine = math.sin(angle), math.cos(angle)
+        cw = np.array([
+            [4 - 3 * cosine, 0, 0, sine / frequency, 2 * (1 - cosine) / frequency, 0],
+            [6 * (sine - angle), 1, 0, -2 * (1 - cosine) / frequency, (4 * sine - 3 * angle) / frequency, 0],
+            [0, 0, cosine, 0, 0, sine / frequency],
+            [3 * frequency * sine, 0, 0, cosine, 2 * sine, 0],
+            [6 * frequency * (cosine - 1), 0, 0, -2 * sine, 4 * cosine - 3, 0],
+            [0, 0, -frequency * sine, 0, 0, cosine],
+        ])
+        rotation = np.array([[cosine, -sine, 0], [sine, cosine, 0], [0, 0, 1]])
+        omega = frequency * np.array([[0, -1, 0], [1, 0, 0], [0, 0, 0]])
+        start_rtn_to_eci = np.block([[np.eye(3), np.zeros((3, 3))], [omega, np.eye(3)]])
+        end_rtn_to_eci = np.block([[rotation, np.zeros((3, 3))], [rotation @ omega, rotation]])
+        actual = np.linalg.solve(end_rtn_to_eci, np.asarray(transitions[-1].matrix_eci) @ start_rtn_to_eci)
+        np.testing.assert_allclose(actual, cw, rtol=1e-8, atol=3e-8)
+
+    def test_j2_and_moon_match_central_differences(self):
+        mission = load_mission(_EXAMPLES / "lunar_perturbation.json")
+        mission = replace(mission, gravity="j2", sample_interval_s=mission.duration_s)
+        matrix = np.asarray(list(propagate_state_transition(mission))[-1].matrix_eci)
+        steps = (0.03, 0.03, 0.03, 1e-6, 1e-6, 1e-6)
+        for column, step in enumerate(steps):
+            offset = step * np.eye(6)[column]
+            expected = _centered_state_difference(mission, offset)
+            np.testing.assert_allclose(matrix @ offset, expected, rtol=1e-5, atol=8e-9)
+
+    def test_fixed_inertial_velocity_jump_preserves_instantaneous_derivative(self):
+        mission = Mission(_INITIAL, 100, 15, impulses=(Impulse(48.5, (0, 0.2, 0)),))
+        rows = list(propagate_state_transition(mission))
+        before, after = [row for row in rows if row.sample.kind in ("pre_burn", "post_burn")]
+        self.assertEqual(before.matrix_eci, after.matrix_eci)
+        self.assertNotEqual(before.sample.state.velocity_km_s, after.sample.state.velocity_km_s)
+        offset = np.array([0.01, -0.03, 0.04, 1e-5, 5e-5, -2e-5])
+        np.testing.assert_allclose(
+            np.asarray(rows[-1].matrix_eci) @ offset, _centered_state_difference(mission, offset),
+            rtol=1e-6, atol=2e-9,
+        )
+
+    def test_surface_impact_retains_sensitivity_at_nominal_impact_epoch(self):
+        mission = Mission(State((6400, 0, 0), (-1, 0, 0)), 100, 5)
+        terminal = list(propagate_state_transition(mission))[-1]
+        self.assertEqual(terminal.sample.kind, "impact")
+        self.assertTrue(np.all(np.isfinite(terminal.matrix_eci)))
+        self.assertAlmostEqual(np.linalg.det(terminal.matrix_eci), 1.0, places=10)
+
+    def test_rejects_force_and_maneuver_models_without_a_jacobian(self):
+        missions = (
+            load_mission(_EXAMPLES / "orbital_decay.json"),
+            load_mission(_EXAMPLES / "finite_burn.json"),
+            load_mission(_EXAMPLES / "hohmann.json"),
+        )
+        for mission in missions:
+            with self.subTest(mission=mission), self.assertRaisesRegex(ValueError, "fixed ECI impulses"):
+                next(propagate_state_transition(mission))

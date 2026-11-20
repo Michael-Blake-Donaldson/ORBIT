@@ -193,6 +193,29 @@ impact. A draw that creates invalid initial conditions fails the analysis
 and identifies the trial. Use the locked environment to reproduce a run.
 [NumPy random generator documentation](https://numpy.org/doc/stable/reference/random/generator)
 
+## Propagate a state transition matrix
+
+```python
+from pathlib import Path
+from orbit_sim import load_mission, propagate_state_transition
+
+mission = load_mission(Path("examples/lunar_perturbation.json"))
+for row in propagate_state_transition(mission):
+    print(row.sample.time_s, row.matrix_eci)
+```
+
+Each matrix maps a small perturbation of the initial Cartesian state to a
+perturbation at the sample's fixed elapsed time. Both sides use the state
+order `x, y, z, vx, vy, vz` in km and km/s. The calculation integrates
+the variational equations along ORBIT's dense nominal trajectory for
+point-mass Earth gravity, J₂, and prescribed third-body ephemerides.
+Fixed inertial impulses keep the matrix continuous across the velocity
+jump. Drag, finite thrust, and RTN impulses are outside the supported
+force models. At a surface impact or apsis, the matrix describes the
+state at the nominal event time. The derivative of the event time is a
+separate quantity.
+[NASA state and covariance propagation reference](https://ntrs.nasa.gov/api/citations/20240004259/downloads/GEONSMS_R3_0_NASA-TP-20240004259.pdf)
+
 ## Export a CCSDS orbit ephemeris
 
 ```powershell
