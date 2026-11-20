@@ -171,6 +171,28 @@ Use `--interval-s` to change the cadence. By default it uses the coarser
 input cadence. The one-day lunar comparison peaks at about 13.20 km
 sampled separation and ends at about 12.14 km.
 
+## Propagate initial-state uncertainty
+
+```powershell
+uv run --locked python -m orbit_sim.ensemble examples/hohmann.json examples/initial_dispersion.json output/hohmann-dispersion.json
+uv run --locked python -m orbit_sim.ensemble examples/hohmann.json examples/initial_dispersion.json output/hohmann-trials.csv --format csv
+```
+
+The dispersion configuration has a `covariance_eci` matrix, an integer
+`seed`, and a `trials` count up to 256. Use the state order
+`x, y, z, vx, vy, vz` in km and km/s. Covariance terms use the products
+of their corresponding units. ORBIT validates symmetry and positive
+semidefiniteness after scaling into correlation space, then draws
+Gaussian perturbations using the configured seed. [NASA predictive covariance reference](https://ntrs.nasa.gov/archive/nasa/casi.ntrs.nasa.gov/20180003439.pdf)
+
+The JSON report includes the number of completed and impacted trials.
+Final-state statistics use the trials that reached mission end, with
+sample covariance available from two or more completions. The CSV
+includes all outcomes and records the actual elapsed time of each
+impact. A draw that creates invalid initial conditions fails the analysis
+and identifies the trial. Use the locked environment to reproduce a run.
+[NumPy random generator documentation](https://numpy.org/doc/stable/reference/random/generator)
+
 ## Mission plan
 
 Plans use UTF-8 JSON. The required fields are:

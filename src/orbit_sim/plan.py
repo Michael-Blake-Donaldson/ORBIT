@@ -1,11 +1,10 @@
 """Read a bounded, versioned JSON mission plan."""
 
-import json
 from dataclasses import fields
 from pathlib import Path
 from typing import TypeVar
 
-from .files import read_text
+from .files import read_json_object
 from .mechanics import state_from_keplerian
 from .mission import (
     MAX_EPHEMERIS_POINTS,
@@ -31,19 +30,6 @@ _Config = TypeVar(
     Spacecraft, State,
     ThirdBody,
 )
-
-
-def _unique_object(items: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in items:
-        if key in result:
-            raise ValueError(f"duplicate mission property {key[:80]!r}")
-        result[key] = value
-    return result
-
-
-def _reject_constant(constant: str) -> None:
-    raise ValueError(f"invalid JSON number {constant}")
 
 
 def _construct(cls: type[_Config], value: object) -> _Config:
@@ -88,17 +74,7 @@ def load_mission(path: str | Path) -> Mission:
 
 
 def _read_plan_values(path: Path) -> dict[str, object]:
-    try:
-        values = json.loads(
-            read_text(path, _MAX_PLAN_BYTES, "mission plan"),
-            object_pairs_hook=_unique_object,
-            parse_constant=_reject_constant,
-        )
-    except RecursionError as exc:
-        raise ValueError("mission plan is nested too deeply") from exc
-    if not isinstance(values, dict):
-        raise ValueError("mission plan must be a JSON object")  # noqa: TRY004 - JSON schema violation
-    return values
+    return read_json_object(path, _MAX_PLAN_BYTES, "mission plan")
 
 
 def _parse_mission(values: dict[str, object]) -> Mission:

@@ -1,5 +1,11 @@
+import csv
+import json
+import subprocess
+import sys
+import tempfile
 import unittest
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 
@@ -13,6 +19,8 @@ from orbit_sim import (
     run_ensemble,
     summarize_ensemble,
 )
+
+EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 
 
 def diagonal(values):
@@ -80,3 +88,48 @@ class UncertaintyTests(unittest.TestCase):
         uncertainty = InitialUncertainty(diagonal([1] + [0] * 5), seed=4)
         with self.assertRaisesRegex(SimulationError, "trial 1 failed"):
             next(run_ensemble(mission, uncertainty))
+
+    def test_propagated_covariance_matches_free_space_state_transition(self):
+        state = State((8e9, 0, 0), (0, 1, 0))
+        mission = Mission(state, 300, 300)
+        model = InitialUncertainty(diagonal([0, 0.04, 0, 0, 4e-8, 0]), trials=20, seed=8)
+        results = list(run_ensemble(mission, model))
+        initial = np.array([
+            (row.initial_state.position_km[1], row.initial_state.velocity_km_s[1]) for row in results
+        ])
+        transition = np.array([[1, 300], [0, 1]])
+        reference = transition @ np.cov(initial, rowvar=False) @ transition.T
+        estimate = np.array(summarize_ensemble(results).final_state_covariance_eci)
+        np.testing.assert_allclose(estimate[np.ix_([1, 4], [1, 4])], reference, rtol=2e-10, atol=1e-14)
+
+    def test_cli_summary_matches_trial_csv_and_rejects_duplicate_inputs(self):
+        values = json.loads((EXAMPLES / "initial_dispersion.json").read_text(encoding="utf-8"))
+        values["trials"] = 3
+        with tempfile.TemporaryDirectory(prefix="orbit ensemble & ") as directory:
+            location = Path(directory)
+            config, summary, trials = (location / name for name in ("config.json", "summary.json", "trials.csv"))
+            config.write_text(json.dumps(values), encoding="utf-8")
+            command = [
+                sys.executable, "-I", "-m", "orbit_sim.ensemble", str(EXAMPLES / "hohmann.json"), str(config),
+            ]
+            for path, format_ in ((summary, "json"), (trials, "csv")):
+                result = subprocess.run(
+                    [*command, str(path), "--format", format_],
+                    check=False, capture_output=True, text=True, cwd=directory, timeout=15,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(summary.read_text(encoding="utf-8"))
+            with trials.open(newline="", encoding="utf-8") as file:
+                rows = list(csv.DictReader(file))
+            states = [[float(row[f"final_{name}"]) for name in report["state_order"]] for row in rows]
+            self.assertEqual(report["completed"], 3)
+            self.assertEqual(report["impacted"], 0)
+            np.testing.assert_allclose(report["final_state_covariance_eci"], np.cov(states, rowvar=False), atol=1e-11)
+            config.write_text('{"trials":1,"trials":2}', encoding="utf-8")
+            rejected = location / "rejected.json"
+            result = subprocess.run(
+                [*command, str(rejected)], check=False, capture_output=True, text=True, cwd=directory, timeout=15,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("duplicate JSON property", result.stderr)
+            self.assertFalse(rejected.exists())
