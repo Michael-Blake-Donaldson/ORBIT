@@ -94,6 +94,11 @@ def _segment_dynamics(
 
 def _schedule(mission: Mission) -> dict[float, _Boundary]:
     boundaries = {mission.duration_s: _Boundary()}
+    # Restart DOP853 where an ephemeris changes polynomial, without adding a telemetry event.
+    for body in mission.third_bodies:
+        for point in body.ephemeris[1:]:
+            if point.time_s < mission.duration_s:
+                boundaries.setdefault(point.time_s, _Boundary())
     for burn in mission.finite_burns:
         boundaries.setdefault(burn.start_s, _Boundary()).ignition = burn
         boundaries.setdefault(burn.end_s, _Boundary()).cutoff = True
@@ -207,6 +212,9 @@ def _propagate(mission: Mission) -> Iterator[Sample]:
         yield _sample(time, "sample", state, j2, mass)
 
     for boundary, events in sorted(boundaries.items()):
+        visible_boundary = (
+            boundary == mission.duration_s or events.cutoff or events.impulse is not None or events.ignition is not None
+        )
         if time < boundary:
             report_apsides = mission.track_apsides and arc is None
             segment_dynamics = _segment_dynamics(dynamics, mission.drag, mass, arc)
@@ -246,7 +254,9 @@ def _propagate(mission: Mission) -> Iterator[Sample]:
                     cadence = cadence_index * mission.sample_interval_s
                     if event_index < len(step_events) and dense is not None:
                         event_time, kind = step_events[event_index]
-                        if kind != "impact" and (_same_time(event_time, time) or _same_time(event_time, boundary)):
+                        if kind != "impact" and (
+                            _same_time(event_time, time) or (visible_boundary and _same_time(event_time, boundary))
+                        ):
                             event_index += 1
                             continue
                         coincident = _same_time(cadence, event_time)
@@ -258,7 +268,9 @@ def _propagate(mission: Mission) -> Iterator[Sample]:
                             cadence_index += int(coincident)
                             event_index += 1
                             continue
-                    if cadence > solver.t or cadence >= boundary or _same_time(cadence, boundary):
+                    if cadence > solver.t or (
+                        visible_boundary and (cadence >= boundary or _same_time(cadence, boundary))
+                    ):
                         break
                     if dense is None:
                         dense = solver.dense_output()
@@ -268,7 +280,7 @@ def _propagate(mission: Mission) -> Iterator[Sample]:
             time, state = solver.t, solver.y
 
         # Boundary events replace a regular sample at the same timestamp.
-        if _same_time(cadence_index * mission.sample_interval_s, time):
+        if visible_boundary and _same_time(cadence_index * mission.sample_interval_s, time):
             cadence_index += 1
         if events.cutoff and arc is not None:
             mass = arc.mass_at(time)

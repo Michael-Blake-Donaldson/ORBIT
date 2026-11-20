@@ -62,7 +62,9 @@ class EphemerisTests(unittest.TestCase):
         # See README for the Horizons settings and reference integration tolerances.
         reference_position = [36147.21373624136, 21707.516347041983, 101.4859995237287]
         reference_velocity = [-1.5683562617459323, 2.609707548051826, 0.4278348808100815]
-        final = list(propagate(mission))[-1].state
+        samples = list(propagate(mission))
+        self.assertEqual([sample.time_s for sample in samples], list(range(0, 86_401, 120)))
+        final = samples[-1].state
         undisturbed = list(propagate(replace(mission, third_bodies=())))[-1].state
         self.assertLess(math.dist(final.position_km, reference_position), 1e-6)
         self.assertLess(math.dist(final.velocity_km_s, reference_velocity), 1e-10)
