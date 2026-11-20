@@ -2,16 +2,16 @@
 
 import argparse
 import csv
-import os
 import sys
 from dataclasses import fields
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
+from .errors import SimulationError
+from .files import atomic_text_output
 from .mechanics import OrbitalElements
 from .mission import Mission
 from .plan import load_mission
-from .propagation import SimulationError, propagate
+from .propagation import propagate
 
 _ELEMENT_COLUMNS = tuple(field.name for field in fields(OrbitalElements))
 _HEADER = (
@@ -22,27 +22,19 @@ _HEADER = (
 
 
 def _write_telemetry(mission: Mission, destination: Path) -> tuple[int, str]:
-    if os.path.lexists(destination):
-        raise FileExistsError(f"output already exists: {destination}")
     count = 0
     outcome = ""
-    with TemporaryDirectory(prefix=".orbit-", dir=destination.parent) as temporary:
-        staged = Path(temporary) / "telemetry.csv"
-        with staged.open("x", encoding="utf-8", newline="") as file:
-            writer = csv.writer(file, lineterminator="\n")
-            writer.writerow(_HEADER)
-            for sample in propagate(mission):
-                writer.writerow((
-                    sample.time_s, sample.kind, *sample.state.position_km, *sample.state.velocity_km_s,
-                    sample.altitude_km, sample.speed_km_s, sample.specific_energy_km2_s2, sample.mass_kg,
-                    *(getattr(sample.elements, name) for name in _ELEMENT_COLUMNS),
-                ))
-                count += 1
-                outcome = sample.kind
-            file.flush()
-            os.fsync(file.fileno())
-        # The link publishes an already closed file and fails if another writer won the race.
-        os.link(staged, destination)
+    with atomic_text_output(destination) as file:
+        writer = csv.writer(file, lineterminator="\n")
+        writer.writerow(_HEADER)
+        for sample in propagate(mission):
+            writer.writerow((
+                sample.time_s, sample.kind, *sample.state.position_km, *sample.state.velocity_km_s,
+                sample.altitude_km, sample.speed_km_s, sample.specific_energy_km2_s2, sample.mass_kg,
+                *(getattr(sample.elements, name) for name in _ELEMENT_COLUMNS),
+            ))
+            count += 1
+            outcome = sample.kind
     return count, outcome
 
 

@@ -36,6 +36,7 @@ uv run --locked python -m orbit_sim examples/j2_precession.json output/j2.csv
 | [Finite prograde burn](examples/finite_burn.json) | A 1,500 N transverse burn from 600 to 720 s raises the orbit and consumes about 57.36 kg. |
 | [Orbital decay](examples/orbital_decay.json) | The configured drag model lowers the semi-major axis of a 400 km orbit by about 1.13 km in one day. |
 | [Tracked ellipse](examples/apsides.json) | Periapsis and apoapsis appear as event rows between 300 s cadence samples. |
+| [Lunar perturbation](examples/lunar_perturbation.json) | The Moon shifts the final position by about 12.14 km versus the same one-day high-orbit case with Earth gravity alone. |
 
 ## Replay telemetry in JavaFX
 
@@ -84,6 +85,8 @@ Optional fields:
 | `finite_burns` | Objects with `start_s`, `end_s`, `thrust_n`, and optional `frame` (`ECI` by default or `RTN`). Each burn lasts at least 1 ms. Windows must be ordered, nonoverlapping, and within the mission. |
 | `spacecraft` | `initial_mass_kg`, `dry_mass_kg`, and `isp_s`. Required for finite burns and optional for impulsive propellant accounting. |
 | `drag` | Optional local atmosphere with `reference_altitude_km`, `reference_density_kg_m3`, `scale_height_km`, `area_m2`, and `coefficient` (default `2.2`). Requires spacecraft mass. |
+| `third_bodies` | Up to eight objects with a unique `name`, `mu_km3_s2`, `ephemeris`, and optional `minimum_separation_km` (default `1`). |
+| `epoch_jd_tdb` | Optional Julian date in TDB for elapsed time zero. The Horizons importer uses it to align successive imports. |
 | `track_apsides` | Boolean, default `false`. Detect distinct radial turning points during coasts and add `periapsis` and `apoapsis` rows. |
 | `integrator` | Optional overrides for `relative_tolerance` (default `1e-11`), `position_tolerance_km` (`1e-8`), `velocity_tolerance_km_s` (`1e-11`), and `max_step_s` (`120`). |
 
@@ -120,6 +123,38 @@ time. This local density model is intended for sensitivity studies around
 the chosen altitude. Space weather, winds, and reentry aerodynamics require
 a higher-fidelity atmosphere. [NASA orbital drag model](https://ilrs.gsfc.nasa.gov/docs/ANDE_AAS_07-265.pdf)
 
+Each third-body ephemeris contains two to 1,024 rows with `time_s`,
+`position_km`, and `velocity_km_s`. Use the same Earth-centered inertial
+axes as the spacecraft, and cover the mission from zero through its end.
+ORBIT uses cubic Hermite interpolation and restarts the integrator at
+ephemeris knots. It subtracts the body's acceleration of Earth from its
+acceleration of the spacecraft. A force evaluation within
+`minimum_separation_km` stops the run with an error. [NASA third-body force formulation](https://ntrs.nasa.gov/api/citations/20240016341/downloads/Nate_Steffen_AAS_Final_Manuscript_with_copyright.pdf)
+
+### Import JPL Horizons vectors
+
+Export a text **Vectors** table from JPL Horizons with these settings:
+
+- Center `500@399` for Earth's center.
+- Reference system **ICRF** and reference plane **Frame**.
+- Vector correction **None** for geometric states, output units **KM-S**,
+  and vector table **2** for position and velocity.
+- CSV enabled, time scale **TDB**, and an interval spanning the mission.
+
+Use a starting epoch that matches the spacecraft initial conditions.
+The first import stores that epoch in the new plan. Further imports
+require the same epoch. [JPL Horizons settings](https://ssd-api.jpl.nasa.gov/doc/horizons.html)
+
+```powershell
+uv run --locked python -m orbit_sim.horizons moon-vectors.txt base-mission.json output/with-moon.json --name Moon --mu 4902.8001184575496 --minimum-separation-km 1737.4
+```
+
+The importer validates the table and publishes a new plan atomically.
+Run the resulting plan with either CLI. The checked-in lunar example
+uses Moon target `301`, DE441 Horizons states from January 1 to 2, 2025
+TDB, and four-hour spacing. It uses the lunar gravitational parameter
+from the JPL DE440 constants file. [JPL gravitational constants](https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/gm_de440.tpc)
+
 ## Telemetry and model
 
 - The CSV includes elapsed time, row kind, ECI Cartesian state, spherical
@@ -136,18 +171,18 @@ a higher-fidelity atmosphere. [NASA orbital drag model](https://ilrs.gsfc.nasa.g
   between samples. Effectively circular motion and roots at segment
   endpoints are omitted. The telemetry row limit also applies to events.
 - The model uses WGS 84 nominal Earth constants. J₂ mode applies only the
-  leading zonal harmonic and reports energy including its contribution to
-  the potential. The elements are instantaneous two-body elements in either
-  gravity mode. Surface contact uses a sphere of radius 6,378.137 km.
+  leading zonal harmonic and includes its potential in the energy telemetry.
+  Energy includes only Earth potential and inertial kinetic energy. The
+  elements are instantaneous two-body elements in either gravity mode.
+  Surface contact uses a sphere of radius 6,378.137 km.
   [NGA WGS 84](https://earth-info.nga.mil/?action=wgs84&dir=wgs84)
 - SciPy's adaptive DOP853 integrator advances the state between maneuver boundaries. Its
   dense interpolation supplies telemetry and brackets surface contact.
   Tolerances control local integration error. See the tests for measured
   trajectory error on the reference cases. [SciPy DOP853](https://docs.scipy.org/doc/scipy/reference/generated/scipy.integrate.DOP853.html)
-- The force model includes point-mass and J₂ gravity, impulsive and
-  constant-magnitude finite thrust, and optional exponential drag.
-  Higher-fidelity analysis requires third-body gravity, higher harmonics,
-  Earth orientation data, and actuator transients when applicable.
+- The force model includes point-mass and J₂ Earth gravity, optional
+  third-body gravity and exponential drag, and impulsive and
+  constant-magnitude finite thrust.
 
 The Java controller launches a caller-selected, trusted Python executable
 without a shell. It accepts valid terminal telemetry from a successful worker
@@ -199,6 +234,12 @@ analytic Kepler time of the first surface crossing. The drag test compares
 one-day circular decay against the first-order work-energy estimate. Java integration tests run
 when the controller JAR and Java are available. [NASA trajectories](https://science.nasa.gov/learn/basics-of-space-flight/chapter4-1/)
 [NASA nodal precession](https://science.nasa.gov/wp-content/uploads/2023/05/GDC_OrbitPrimer.pdf)
+
+The lunar regression test compares against a separate propagation using
+30-minute Horizons vectors, a position-only cubic spline, direct-minus-indirect
+lunar acceleration, and DOP853 with relative tolerance `3e-14`, absolute
+tolerance `1e-13`, and a maximum step of 30 seconds. A withheld Horizons
+vector also checks the four-hour interpolant between samples.
 
 The profiling command reports median runtime and rows per second after a
 warm-up. It measures the numerical engine and telemetry construction,

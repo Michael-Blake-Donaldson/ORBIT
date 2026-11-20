@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "epoch_jd_tdb": 2460676.5,
   "initial_orbit": {
     "periapsis_radius_km": 42164.17,
     "eccentricity": 0,

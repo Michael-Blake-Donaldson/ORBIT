@@ -5,6 +5,7 @@ from dataclasses import fields
 from pathlib import Path
 from typing import TypeVar
 
+from .files import read_text
 from .mechanics import state_from_keplerian
 from .mission import (
     MAX_EPHEMERIS_POINTS,
@@ -71,19 +72,25 @@ def _load_third_bodies(value: object) -> tuple[ThirdBody, ...]:
 
 def load_mission(path: str | Path) -> Mission:
     """Load a version 1 mission from a UTF-8 JSON file."""
-    source = Path(path)
-    if not source.is_file():
-        raise ValueError("mission plan must be a regular file")
-    with source.open("rb") as file:
-        raw = file.read(_MAX_PLAN_BYTES + 1)
-    if len(raw) > _MAX_PLAN_BYTES:
-        raise ValueError("mission plan exceeds 256 KiB")
+    return _parse_mission(_read_plan_values(Path(path)))
+
+
+def _read_plan_values(path: Path) -> dict[str, object]:
     try:
-        values = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object, parse_constant=_reject_constant)
+        values = json.loads(
+            read_text(path, _MAX_PLAN_BYTES, "mission plan"),
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_constant,
+        )
     except RecursionError as exc:
         raise ValueError("mission plan is nested too deeply") from exc
     if not isinstance(values, dict):
         raise ValueError("mission plan must be a JSON object")  # noqa: TRY004 - JSON schema violation
+    return values
+
+
+def _parse_mission(values: dict[str, object]) -> Mission:
+    values = values.copy()
     version = values.pop("schema_version", None)
     if type(version) is not int or version != 1:
         raise ValueError("schema_version must be the integer 1")

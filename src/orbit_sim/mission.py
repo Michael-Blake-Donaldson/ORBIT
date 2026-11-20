@@ -206,6 +206,7 @@ class Mission:
     drag: AtmosphericDrag | None = None
     track_apsides: bool = False
     third_bodies: tuple[ThirdBody, ...] = ()
+    epoch_jd_tdb: float | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.initial_state, State):
@@ -226,6 +227,9 @@ class Mission:
             raise TypeError("track_apsides must be a boolean")
         if self.gravity not in ("point_mass", "j2"):
             raise ValueError("gravity must be point_mass or j2")
+        if self.epoch_jd_tdb is not None:
+            epoch = number(self.epoch_jd_tdb, "epoch_jd_tdb", 1_000_000, 4_000_000)
+            object.__setattr__(self, "epoch_jd_tdb", epoch)
 
         duration = number(self.duration_s, "duration_s", 1e-3, 2_592_000)
         interval = number(self.sample_interval_s, "sample_interval_s", 1e-3, 2_592_000)
