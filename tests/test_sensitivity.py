@@ -1,4 +1,8 @@
+import csv
 import math
+import subprocess
+import sys
+import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -9,6 +13,7 @@ from orbit_sim import (
     Impulse,
     Mission,
     State,
+    load_initial_uncertainty,
     load_mission,
     propagate,
     propagate_covariance,
@@ -144,3 +149,22 @@ class StateTransitionTests(unittest.TestCase):
         invalid[1, 2] = invalid[2, 1] = 1.001
         with self.assertRaisesRegex(ValueError, "positive semidefinite"):
             next(propagate_covariance(mission, invalid.tolist()))
+
+    def test_covariance_csv_preserves_burn_boundaries_and_cross_terms(self):
+        plan, config = _EXAMPLES / "hohmann.json", _EXAMPLES / "initial_dispersion.json"
+        with tempfile.TemporaryDirectory(prefix="orbit covariance & ") as directory:
+            output = Path(directory) / "hohmann-covariance.csv"
+            command = [
+                sys.executable, "-I", "-m", "orbit_sim.covariance_timeline", str(plan), str(config), str(output),
+            ]
+            result = subprocess.run(command, check=False, capture_output=True, text=True, cwd=directory, timeout=15)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with output.open(encoding="utf-8", newline="") as file:
+                rows = list(csv.DictReader(file))
+        observations = list(propagate_covariance(load_mission(plan), load_initial_uncertainty(config).covariance_eci))
+        self.assertEqual(len(rows), len(observations))
+        self.assertEqual(len(rows[-1]), 4 + 21)
+        self.assertEqual([(row["time_s"], row["kind"]) for row in rows[:2]], [("0.0", "pre_burn"), ("0.0", "post_burn")])
+        self.assertEqual(float(rows[-1]["cov_vx_km_s__y_km"]), observations[-1].covariance_eci[3][1])
+        expected_rms = np.sqrt(np.trace(np.asarray(observations[-1].covariance_eci)[:3, :3]))
+        self.assertAlmostEqual(float(rows[-1]["position_rms_km"]), expected_rms, places=12)

@@ -2,11 +2,13 @@
 
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
 
 from .errors import SimulationError
+from .files import read_json_object
 from .mechanics import Array
 from .mission import Mission, State, number
 from .propagation import propagate
@@ -14,6 +16,8 @@ from .propagation import propagate
 Covariance = tuple[tuple[float, ...], ...]
 _STATE_DIMENSION = 6
 _CORRELATION_TOLERANCE = 1e-12
+_STATE_COLUMNS = ("x_km", "y_km", "z_km", "vx_km_s", "vy_km_s", "vz_km_s")
+_MAX_UNCERTAINTY_BYTES = 16 * 1024
 MAX_TRIALS = 256
 
 
@@ -73,6 +77,15 @@ class InitialUncertainty:
         covariance, factor = _validated_covariance(self.covariance_eci)
         object.__setattr__(self, "covariance_eci", covariance)
         object.__setattr__(self, "_factor", factor)
+
+
+def load_initial_uncertainty(path: Path) -> InitialUncertainty:
+    """Read and validate a bounded JSON covariance and dispersion configuration."""
+    values = read_json_object(path, _MAX_UNCERTAINTY_BYTES, "dispersion configuration")
+    try:
+        return InitialUncertainty(**values)
+    except TypeError as exc:
+        raise ValueError(f"invalid dispersion configuration fields: {exc}") from exc
 
 
 @dataclass(frozen=True, slots=True)

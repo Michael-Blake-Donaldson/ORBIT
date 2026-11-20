@@ -223,6 +223,17 @@ covariance factor, including rank-deficient inputs, and reconstructs the
 covariance as a product with its transpose. This models small initial
 errors under the prescribed dynamics with zero process noise.
 
+```powershell
+uv run --locked python -m orbit_sim.covariance_timeline examples/hohmann.json examples/initial_dispersion.json output/hohmann-covariance.csv
+```
+
+The covariance timeline uses the matrix in the dispersion configuration.
+The seed and trial count apply to the Monte Carlo command. The CSV
+preserves before- and after-burn samples and reports the lower triangle
+in Cartesian state order. Each covariance column uses the product of its
+named coordinate units. The 3D RMS columns take the square root of the
+sum of the position or velocity variances.
+
 ## Export a CCSDS orbit ephemeris
 
 ```powershell

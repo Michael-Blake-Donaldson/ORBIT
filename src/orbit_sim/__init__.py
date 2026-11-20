@@ -46,6 +46,7 @@ from .uncertainty import (
     EnsembleSummary,
     InitialUncertainty,
     TrialOutcome,
+    load_initial_uncertainty,
     run_ensemble,
     summarize_ensemble,
 )
@@ -85,6 +86,7 @@ __all__ = [
     "ecef_to_geodetic",
     "eci_to_ecef",
     "eclipse_windows",
+    "load_initial_uncertainty",
     "load_mission",
     "look_angles",
     "mission_power_budget",
