@@ -106,6 +106,19 @@ def _cross(left: Array, right: Array) -> Array:
     return np.array((y * c - z * b, z * a - x * c, x * b - y * a))
 
 
+def _rtn_basis(position: Array, velocity: Array) -> tuple[Array, Array, Array] | None:
+    radius = hypot(*position)
+    if radius == 0:
+        return None
+    radial = position / radius
+    normal = _cross(radial, velocity)
+    magnitude = hypot(*normal)
+    if magnitude <= _ELEMENT_EPSILON * hypot(*velocity):
+        return None
+    normal /= magnitude
+    return radial, _cross(normal, radial), normal
+
+
 def _oriented_angle(start: Array, end: Array, normal: Array) -> float:
     # atan2 preserves the quadrant and behaves well near zero and 180 degrees.
     return degrees(atan2(_cross(start, end) @ normal, start @ end)) % 360

@@ -15,11 +15,11 @@ from .mechanics import (
     Array,
     OrbitalElements,
     _altitude,
-    _cross,
     _drag_acceleration,
     _dynamics,
     _orbital_elements,
     _radial_motion,
+    _rtn_basis,
     _specific_energy,
 )
 from .mission import (
@@ -160,14 +160,10 @@ def _distinct_apsis(time: float, state: Array, dynamics: Callable[[float, Array]
 def _inertial_vector(components: Array, frame: str, state: Array) -> Array:
     if frame == "ECI":
         return components
-    position, velocity = state[:3], state[3:]
-    radial = position / hypot(*position)
-    normal = _cross(radial, velocity)
-    norm = hypot(*normal)
-    if norm <= 1e-10 * hypot(*velocity):
+    basis = _rtn_basis(state[:3], state[3:])
+    if basis is None:
         raise SimulationError("RTN burn requires a non-radial state")
-    normal /= norm
-    transverse = _cross(normal, radial)
+    radial, transverse, normal = basis
     return components[0] * radial + components[1] * transverse + components[2] * normal
 
 

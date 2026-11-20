@@ -153,6 +153,24 @@ instantaneous power, stored charge, and cumulative generated, demanded,
 curtailed, unserved, and lost energy. The model uses constant conversion
 efficiencies for the battery.
 
+## Compare two trajectories
+
+```powershell
+uv run --locked python -m orbit_sim.compare examples/lunar_baseline.json examples/lunar_perturbation.json output/lunar-comparison.csv
+```
+
+Both plans must use the same inertial axes, duration, and time-zero epoch.
+The command resamples each trajectory on the same grid and reports
+candidate minus reference in inertial axes and in the reference orbit's
+radial, transverse, and normal (RTN) directions. Velocity differences
+are inertial velocities resolved in those axes. The comparison uses the
+state after all maneuvers at a shared timestamp and reports samples
+through the common portion of both trajectories. [NASA orbit-frame reference](https://ntrs.nasa.gov/api/citations/20240004259/downloads/GEONSMS_R3_0_NASA-TP-20240004259.pdf)
+
+Use `--interval-s` to change the cadence. By default it uses the coarser
+input cadence. The one-day lunar comparison peaks at about 13.20 km
+sampled separation and ends at about 12.14 km.
+
 ## Mission plan
 
 Plans use UTF-8 JSON. The required fields are:

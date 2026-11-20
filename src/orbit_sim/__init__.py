@@ -1,6 +1,7 @@
 """Public numerical simulation API."""
 
 from .access import AccessWindow, access_windows
+from .comparison import TrajectoryDelta, compare_trajectories
 from .errors import SimulationError
 from .ground import (
     GeodeticPosition,
@@ -59,8 +60,10 @@ __all__ = [
     "Spacecraft",
     "State",
     "ThirdBody",
+    "TrajectoryDelta",
     "access_windows",
     "battery_budget",
+    "compare_trajectories",
     "ecef_to_geodetic",
     "eci_to_ecef",
     "eclipse_windows",
