@@ -7,7 +7,10 @@ from typing import TypeVar
 
 from .mechanics import state_from_keplerian
 from .mission import (
+    MAX_EPHEMERIS_POINTS,
+    MAX_THIRD_BODIES,
     AtmosphericDrag,
+    EphemerisPoint,
     FiniteBurn,
     Impulse,
     Integrator,
@@ -15,10 +18,15 @@ from .mission import (
     Mission,
     Spacecraft,
     State,
+    ThirdBody,
 )
 
 _MAX_PLAN_BYTES = 256 * 1024
-_Config = TypeVar("_Config", AtmosphericDrag, FiniteBurn, Impulse, Integrator, KeplerianOrbit, Mission, Spacecraft, State)
+_Config = TypeVar(
+    "_Config",
+    AtmosphericDrag, EphemerisPoint, FiniteBurn, Impulse, Integrator, KeplerianOrbit, Mission, Spacecraft, State,
+    ThirdBody,
+)
 
 
 def _unique_object(items: list[tuple[str, object]]) -> dict[str, object]:
@@ -44,6 +52,21 @@ def _construct(cls: type[_Config], value: object) -> _Config:
         return cls(**value)
     except TypeError as exc:
         raise ValueError(f"invalid {cls.__name__} fields: {exc}") from exc
+
+
+def _load_third_bodies(value: object) -> tuple[ThirdBody, ...]:
+    if not isinstance(value, list) or len(value) > MAX_THIRD_BODIES:
+        raise ValueError(f"third_bodies must be an array with at most {MAX_THIRD_BODIES} entries")
+    bodies = []
+    for body in value:
+        if not isinstance(body, dict):
+            raise ValueError("ThirdBody must be an object")  # noqa: TRY004 - JSON schema violation
+        entries = body.get("ephemeris")
+        if not isinstance(entries, list) or not 2 <= len(entries) <= MAX_EPHEMERIS_POINTS:
+            raise ValueError(f"ephemeris must be an array with 2 to {MAX_EPHEMERIS_POINTS} entries")
+        points = tuple(_construct(EphemerisPoint, entry) for entry in entries)
+        bodies.append(_construct(ThirdBody, body | {"ephemeris": points}))
+    return tuple(bodies)
 
 
 def load_mission(path: str | Path) -> Mission:
@@ -86,4 +109,6 @@ def load_mission(path: str | Path) -> Mission:
         values["integrator"] = _construct(Integrator, values["integrator"])
     if "drag" in values:
         values["drag"] = _construct(AtmosphericDrag, values["drag"])
+    if "third_bodies" in values:
+        values["third_bodies"] = _load_third_bodies(values["third_bodies"])
     return _construct(Mission, values)

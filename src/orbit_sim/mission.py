@@ -9,6 +9,8 @@ EARTH_J2 = 1.08262982131e-3
 EARTH_ROTATION_RAD_S = 7.292115e-5
 STANDARD_GRAVITY_KM_S2 = 0.00980665
 MAX_SAMPLES = 100_000
+MAX_THIRD_BODIES = 8
+MAX_EPHEMERIS_POINTS = 1024
 
 Vector = tuple[float, float, float]
 
@@ -34,6 +36,53 @@ class State:
     def __post_init__(self) -> None:
         object.__setattr__(self, "position_km", vector(self.position_km, "position_km", 1e12))
         object.__setattr__(self, "velocity_km_s", vector(self.velocity_km_s, "velocity_km_s", 1e5))
+
+
+@dataclass(frozen=True, slots=True)
+class EphemerisPoint:
+    """An Earth-relative body state at elapsed mission time."""
+
+    time_s: float
+    position_km: Vector
+    velocity_km_s: Vector
+
+    def __post_init__(self) -> None:
+        position = vector(self.position_km, "ephemeris position_km", 1e12)
+        if hypot(*position) <= EARTH_RADIUS_KM:
+            raise ValueError("third-body ephemeris points must be outside Earth")
+        object.__setattr__(self, "time_s", number(self.time_s, "ephemeris time_s", 0, 2_592_000))
+        object.__setattr__(self, "position_km", position)
+        object.__setattr__(self, "velocity_km_s", vector(self.velocity_km_s, "ephemeris velocity_km_s", 1e3))
+
+
+@dataclass(frozen=True, slots=True)
+class ThirdBody:
+    name: str
+    mu_km3_s2: float
+    ephemeris: tuple[EphemerisPoint, ...]
+    minimum_separation_km: float = 1.0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not 1 <= len(self.name) <= 48 or not self.name.isprintable():
+            raise ValueError("third-body name must contain 1 to 48 printable characters")
+        name = self.name.strip()
+        if not name:
+            raise ValueError("third-body name cannot be blank")
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "mu_km3_s2", number(self.mu_km3_s2, "mu_km3_s2", 1e-12, 1e14))
+        minimum = number(self.minimum_separation_km, "minimum_separation_km", 1, 1e7)
+        object.__setattr__(self, "minimum_separation_km", minimum)
+        if not isinstance(self.ephemeris, (tuple, list)) or not 2 <= len(self.ephemeris) <= MAX_EPHEMERIS_POINTS:
+            raise ValueError(f"third-body ephemeris must contain 2 to {MAX_EPHEMERIS_POINTS} points")
+        points = tuple(self.ephemeris)
+        previous = -1.0
+        for point in points:
+            if not isinstance(point, EphemerisPoint):
+                raise TypeError("ephemeris must contain EphemerisPoint values")
+            if point.time_s < previous + 0.001:
+                raise ValueError("ephemeris points must be ordered and at least 0.001 s apart")
+            previous = point.time_s
+        object.__setattr__(self, "ephemeris", points)
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +205,7 @@ class Mission:
     finite_burns: tuple[FiniteBurn, ...] = ()
     drag: AtmosphericDrag | None = None
     track_apsides: bool = False
+    third_bodies: tuple[ThirdBody, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.initial_state, State):
@@ -181,6 +231,7 @@ class Mission:
         interval = number(self.sample_interval_s, "sample_interval_s", 1e-3, 2_592_000)
         object.__setattr__(self, "duration_s", duration)
         object.__setattr__(self, "sample_interval_s", interval)
+        object.__setattr__(self, "third_bodies", self._validated_third_bodies(duration))
 
         if not isinstance(self.impulses, (tuple, list)) or len(self.impulses) > 1000:
             raise ValueError("impulses must contain at most 1000 entries")
@@ -199,6 +250,22 @@ class Mission:
             raise ValueError(f"mission exceeds the {MAX_SAMPLES} telemetry row budget")
         if ceil(duration / self.integrator.max_step_s) > 50_000:
             raise ValueError("mission exceeds the integration step budget for the chosen max_step_s")
+
+    def _validated_third_bodies(self, duration: float) -> tuple[ThirdBody, ...]:
+        if not isinstance(self.third_bodies, (tuple, list)) or len(self.third_bodies) > MAX_THIRD_BODIES:
+            raise ValueError(f"mission must contain at most {MAX_THIRD_BODIES} third bodies")
+        bodies = tuple(self.third_bodies)
+        names = set()
+        for body in bodies:
+            if not isinstance(body, ThirdBody):
+                raise TypeError("third_bodies must contain ThirdBody values")
+            name = body.name.casefold()
+            if name in names:
+                raise ValueError("third-body names must be unique")
+            names.add(name)
+            if body.ephemeris[0].time_s != 0 or body.ephemeris[-1].time_s < duration:
+                raise ValueError(f"ephemeris for {body.name} must cover the entire mission from t=0")
+        return bodies
 
     def _validated_finite_burns(self, duration: float, impulses: tuple[Impulse, ...]) -> tuple[FiniteBurn, ...]:
         if not isinstance(self.finite_burns, (tuple, list)) or len(self.finite_burns) + len(impulses) > 1000:

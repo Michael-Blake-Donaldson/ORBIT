@@ -9,6 +9,8 @@ import numpy as np
 from scipy.integrate import DOP853, DenseOutput
 from scipy.optimize import brentq
 
+from .ephemeris import _with_third_bodies
+from .errors import SimulationError
 from .mechanics import (
     Array,
     OrbitalElements,
@@ -37,10 +39,6 @@ SampleKind = Literal[
     "sample", "pre_burn", "post_burn", "burn_start", "burn_end", "periapsis", "apoapsis", "complete", "impact",
 ]
 _MAX_ACCEPTED_STEPS = 100_000
-
-
-class SimulationError(RuntimeError):
-    """The mission could not be propagated as specified."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,7 +192,7 @@ def propagate(mission: Mission) -> Iterator[Sample]:
 
 def _propagate(mission: Mission) -> Iterator[Sample]:
     j2 = mission.gravity == "j2"
-    dynamics = _dynamics(j2)
+    dynamics = _with_third_bodies(_dynamics(j2), mission.third_bodies)
     state = np.array((*mission.initial_state.position_km, *mission.initial_state.velocity_km_s))
     spacecraft = mission.spacecraft
     mass = spacecraft.initial_mass_kg if spacecraft is not None else None
