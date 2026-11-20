@@ -1,10 +1,8 @@
 package orbit.viewer;
 
-import java.io.BufferedInputStream;
+import static orbit.viewer.BoundedCsv.number;
+
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -15,9 +13,6 @@ final class Telemetry {
     static final String HEADER = "time_s,kind,x_km,y_km,z_km,vx_km_s,vy_km_s,vz_km_s,"
             + "altitude_km,speed_km_s,specific_energy_km2_s2,mass_kg,semi_major_axis_km,"
             + "eccentricity,inclination_deg,raan_deg,argument_of_periapsis_deg,true_anomaly_deg";
-    private static final int MAX_BYTES = 64 * 1024 * 1024;
-    private static final int MAX_ROWS = 100_000;
-    private static final int MAX_ROW_BYTES = 1024;
     private static final int COLUMN_COUNT = 18;
 
     enum Kind {
@@ -100,29 +95,19 @@ final class Telemetry {
     private Telemetry() {}
 
     static Flight load(Path path) throws IOException {
-        if (!Files.isRegularFile(path)) {
-            throw new IOException("The telemetry path does not point to a readable regular file.");
-        }
-        if (Files.size(path) > MAX_BYTES) {
-            throw new IOException("Telemetry exceeds the 64 MiB limit.");
-        }
         List<Sample> rows = new ArrayList<>();
         List<Integer> events = new ArrayList<>();
         double extent = EARTH_RADIUS_KM;
         double minAltitude = Double.POSITIVE_INFINITY;
         double maxAltitude = Double.NEGATIVE_INFINITY;
-        byte[] buffer = new byte[MAX_ROW_BYTES];
-        try (InputStream input = new BufferedInputStream(Files.newInputStream(path))) {
-            if (!HEADER.equals(readLine(input, buffer))) {
+        try (BoundedCsv input = new BoundedCsv(path)) {
+            if (!HEADER.equals(input.readLine())) {
                 throw new IOException("The file is missing the ORBIT telemetry header.");
             }
             Sample previous = null;
             boolean burning = false;
-            for (String line = readLine(input, buffer); line != null; line = readLine(input, buffer)) {
-                if (Thread.currentThread().isInterrupted()) {
-                    throw new IOException("Telemetry loading was interrupted.");
-                }
-                if (rows.size() == MAX_ROWS) {
+            for (String line = input.readLine(); line != null; line = input.readLine()) {
+                if (rows.size() == BoundedCsv.MAX_ROWS) {
                     throw new IOException("Telemetry exceeds the 100,000-row limit.");
                 }
                 Sample row = parse(line, rows.size() + 2);
@@ -146,44 +131,26 @@ final class Telemetry {
         return new Flight(rows, events, extent, minAltitude, maxAltitude);
     }
 
-    private static String readLine(InputStream input, byte[] buffer) throws IOException {
-        int count = 0;
-        int next;
-        while ((next = input.read()) != -1 && next != '\n') {
-            if (count == buffer.length || (next < 32 && next != '\r') || next > 126) {
-                throw new IOException("Telemetry contains an invalid or oversized line.");
-            }
-            buffer[count++] = (byte) next;
-        }
-        if (next == -1 && count == 0) {
-            return null;
-        }
-        if (count > 0 && buffer[count - 1] == '\r') {
-            count--;
-        }
-        return new String(buffer, 0, count, StandardCharsets.US_ASCII);
-    }
-
     private static Sample parse(String line, int lineNumber) throws IOException {
         String[] fields = line.split(",", -1);
         if (fields.length != COLUMN_COUNT) {
             throw new IOException("Line " + lineNumber + " must have " + COLUMN_COUNT + " columns.");
         }
         try {
-            double time = bounded(fields[0], 0, 2_592_000);
+            double time = number(fields[0], 0, 2_592_000);
             Kind kind = Kind.parse(fields[1]);
-            double x = bounded(fields[2], -1e12, 1e12);
-            double y = bounded(fields[3], -1e12, 1e12);
-            double z = bounded(fields[4], -1e12, 1e12);
+            double x = number(fields[2], -1e12, 1e12);
+            double y = number(fields[3], -1e12, 1e12);
+            double z = number(fields[4], -1e12, 1e12);
             for (int i = 5; i <= 7; i++) {
-                bounded(fields[i], -1e5, 1e5);
+                number(fields[i], -1e5, 1e5);
             }
-            double altitude = bounded(fields[8], -EARTH_RADIUS_KM, 2e12);
-            double speed = bounded(fields[9], 0, 2e5);
-            double energy = bounded(fields[10], -1e12, 1e12);
+            double altitude = number(fields[8], -EARTH_RADIUS_KM, 2e12);
+            double speed = number(fields[9], 0, 2e5);
+            double energy = number(fields[10], -1e12, 1e12);
             double mass = optional(fields[11], 0, 1e8);
             double axis = optional(fields[12], -1e23, 1e23);
-            double eccentricity = bounded(fields[13], 0, 1e17);
+            double eccentricity = number(fields[13], 0, 1e17);
             double inclination = optional(fields[14], 0, 180);
             double raan = optional(fields[15], 0, 360);
             optional(fields[16], 0, 360);
@@ -220,15 +187,7 @@ final class Telemetry {
         };
     }
 
-    private static double bounded(String value, double minimum, double maximum) {
-        double number = Double.parseDouble(value);
-        if (!(number >= minimum && number <= maximum)) {
-            throw new IllegalArgumentException("number out of range");
-        }
-        return number;
-    }
-
     private static double optional(String value, double minimum, double maximum) {
-        return value.isEmpty() ? Double.NaN : bounded(value, minimum, maximum);
+        return value.isEmpty() ? Double.NaN : number(value, minimum, maximum);
     }
 }
