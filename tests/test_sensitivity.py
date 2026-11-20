@@ -11,6 +11,7 @@ from orbit_sim import (
     State,
     load_mission,
     propagate,
+    propagate_covariance,
     propagate_state_transition,
 )
 from orbit_sim.mission import EARTH_MU_KM3_S2
@@ -92,12 +93,54 @@ class StateTransitionTests(unittest.TestCase):
         self.assertTrue(np.all(np.isfinite(terminal.matrix_eci)))
         self.assertAlmostEqual(np.linalg.det(terminal.matrix_eci), 1.0, places=10)
 
+    def test_rtn_impulses_include_rotation_of_the_commanded_vector(self):
+        mission = Mission(
+            State((7000, 125, -230), (-0.15, 7.5, 0.8)), 700, 25,
+            impulses=(
+                Impulse(0, (0.03, -0.1, 0.24), frame="RTN"),
+                Impulse(200, (-0.15, 0.07, -0.12), frame="RTN"),
+                Impulse(700, (0.02, 0.03, -0.05), frame="RTN"),
+            ),
+        )
+        rows = list(propagate_state_transition(mission))
+        np.testing.assert_array_equal(rows[0].matrix_eci, np.eye(6))
+        self.assertNotEqual(rows[0].matrix_eci, rows[1].matrix_eci)
+        self.assertNotEqual(rows[-3].matrix_eci, rows[-2].matrix_eci)
+        self.assertEqual(rows[-2].matrix_eci, rows[-1].matrix_eci)
+        for column, step in enumerate((0.03, 0.03, 0.03, 2e-5, 2e-5, 2e-5)):
+            offset = step * np.eye(6)[column]
+            np.testing.assert_allclose(
+                np.asarray(rows[-1].matrix_eci) @ offset, _centered_state_difference(mission, offset),
+                rtol=1e-6, atol=2e-9,
+            )
+
     def test_rejects_force_and_maneuver_models_without_a_jacobian(self):
         missions = (
             load_mission(_EXAMPLES / "orbital_decay.json"),
             load_mission(_EXAMPLES / "finite_burn.json"),
-            load_mission(_EXAMPLES / "hohmann.json"),
         )
         for mission in missions:
-            with self.subTest(mission=mission), self.assertRaisesRegex(ValueError, "fixed ECI impulses"):
+            with self.subTest(mission=mission), self.assertRaisesRegex(ValueError, "impulsive thrust"):
                 next(propagate_state_transition(mission))
+
+    def test_rank_one_covariance_follows_two_independent_hohmann_trajectories(self):
+        mission = load_mission(_EXAMPLES / "hohmann.json")
+        offset = np.array([0.02, -0.022, 0.029, 1e-5, 1.5e-5, -2.4e-5])
+        initial = np.outer(offset, offset)
+        rows = list(propagate_covariance(mission, initial.tolist()))
+        np.testing.assert_allclose(rows[0].covariance_eci, initial, rtol=1e-14, atol=1e-20)
+        self.assertEqual(rows[0].sample.kind, "pre_burn")
+        self.assertEqual(rows[1].sample.kind, "post_burn")
+        self.assertNotEqual(rows[1].covariance_eci, rows[0].covariance_eci)
+        expected = _centered_state_difference(mission, offset)
+        np.testing.assert_allclose(rows[-1].covariance_eci, np.outer(expected, expected), rtol=1e-6, atol=2e-12)
+
+    def test_zero_covariance_and_invalid_covariance(self):
+        mission = Mission(_INITIAL, 10, 5)
+        zero = np.zeros((6, 6))
+        for row in propagate_covariance(mission, zero.tolist()):
+            np.testing.assert_array_equal(row.covariance_eci, zero)
+        invalid = np.eye(6)
+        invalid[1, 2] = invalid[2, 1] = 1.001
+        with self.assertRaisesRegex(ValueError, "positive semidefinite"):
+            next(propagate_covariance(mission, invalid.tolist()))

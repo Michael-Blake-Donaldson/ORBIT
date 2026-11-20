@@ -36,7 +36,12 @@ from .mission import (
 from .plan import load_mission
 from .power import PowerSample, battery_budget, mission_power_budget
 from .propagation import Sample, propagate
-from .sensitivity import StateTransition, propagate_state_transition
+from .sensitivity import (
+    CovarianceSample,
+    StateTransition,
+    propagate_covariance,
+    propagate_state_transition,
+)
 from .uncertainty import (
     EnsembleSummary,
     InitialUncertainty,
@@ -48,6 +53,7 @@ from .uncertainty import (
 __all__ = [
     "AccessWindow",
     "AtmosphericDrag",
+    "CovarianceSample",
     "EclipseWindow",
     "EnsembleSummary",
     "EphemerisPoint",
@@ -84,6 +90,7 @@ __all__ = [
     "mission_power_budget",
     "orbital_elements",
     "propagate",
+    "propagate_covariance",
     "propagate_state_transition",
     "run_ensemble",
     "solar_samples",

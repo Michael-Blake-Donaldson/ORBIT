@@ -42,6 +42,20 @@ def _covariance_factor(matrix: Array) -> Array:
     return deviations[:, None] * root
 
 
+def _validated_covariance(covariance: Covariance) -> tuple[Covariance, Array]:
+    if not isinstance(covariance, (list, tuple)) or len(covariance) != _STATE_DIMENSION:
+        raise ValueError("initial covariance must be a 6 by 6 matrix")
+    rows = []
+    for row in covariance:
+        if not isinstance(row, (list, tuple)) or len(row) != _STATE_DIMENSION:
+            raise ValueError("initial covariance must be a 6 by 6 matrix")
+        rows.append(tuple(number(value, "covariance_eci", -1e12, 1e12) for value in row))
+    immutable = tuple(rows)
+    factor = _covariance_factor(np.array(immutable))
+    factor.flags.writeable = False
+    return immutable, factor
+
+
 @dataclass(frozen=True, slots=True)
 class InitialUncertainty:
     """An ECI covariance over x, y, z, vx, vy, vz, in km and km/s."""
@@ -56,17 +70,8 @@ class InitialUncertainty:
             raise ValueError(f"trials must be an integer in [1, {MAX_TRIALS}]")
         if type(self.seed) is not int or not 0 <= self.seed < 2**64:
             raise ValueError("seed must be an unsigned 64-bit integer")
-        if not isinstance(self.covariance_eci, (list, tuple)) or len(self.covariance_eci) != _STATE_DIMENSION:
-            raise ValueError("initial covariance must be a 6 by 6 matrix")
-        rows = []
-        for row in self.covariance_eci:
-            if not isinstance(row, (list, tuple)) or len(row) != _STATE_DIMENSION:
-                raise ValueError("initial covariance must be a 6 by 6 matrix")
-            rows.append(tuple(number(value, "covariance_eci", -1e12, 1e12) for value in row))
-        immutable = tuple(rows)
-        factor = _covariance_factor(np.array(immutable))
-        factor.flags.writeable = False
-        object.__setattr__(self, "covariance_eci", immutable)
+        covariance, factor = _validated_covariance(self.covariance_eci)
+        object.__setattr__(self, "covariance_eci", covariance)
         object.__setattr__(self, "_factor", factor)
 
 

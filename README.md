@@ -210,11 +210,18 @@ order `x, y, z, vx, vy, vz` in km and km/s. The calculation integrates
 the variational equations along ORBIT's dense nominal trajectory for
 point-mass Earth gravity, J₂, and prescribed third-body ephemerides.
 Fixed inertial impulses keep the matrix continuous across the velocity
-jump. Drag, finite thrust, and RTN impulses are outside the supported
-force models. At a surface impact or apsis, the matrix describes the
+jump. RTN impulses differentiate the local orbital frame using the
+pre-burn state. The supported force models exclude drag and finite
+thrust. At a surface impact or apsis, the matrix describes the
 state at the nominal event time. The derivative of the event time is a
 separate quantity.
 [NASA state and covariance propagation reference](https://ntrs.nasa.gov/api/citations/20240004259/downloads/GEONSMS_R3_0_NASA-TP-20240004259.pdf)
+
+Call `propagate_covariance(mission, initial_covariance_eci)` to obtain the
+linearized covariance at each of those samples. It transports the initial
+covariance factor, including rank-deficient inputs, and reconstructs the
+covariance as a product with its transpose. This models small initial
+errors under the prescribed dynamics with zero process noise.
 
 ## Export a CCSDS orbit ephemeris
 
