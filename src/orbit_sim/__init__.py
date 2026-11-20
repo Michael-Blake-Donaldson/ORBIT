@@ -10,6 +10,7 @@ from .ground import (
     eci_to_ecef,
     look_angles,
 )
+from .illumination import EclipseWindow, eclipse_windows
 from .mechanics import OrbitalElements, orbital_elements, state_from_keplerian
 from .mission import (
     AtmosphericDrag,
@@ -27,8 +28,10 @@ from .plan import load_mission
 from .propagation import Sample, propagate
 
 __all__ = [
-    "AccessWindow", "AtmosphericDrag", "EphemerisPoint", "FiniteBurn", "GeodeticPosition", "GroundStation", "Impulse",
+    "AccessWindow", "AtmosphericDrag", "EclipseWindow", "EphemerisPoint", "FiniteBurn", "GeodeticPosition",
+    "GroundStation", "Impulse",
     "Integrator", "KeplerianOrbit", "LookAngles", "Mission", "OrbitalElements", "Sample", "SimulationError",
-    "Spacecraft", "State", "ThirdBody", "access_windows", "ecef_to_geodetic", "eci_to_ecef", "load_mission", "look_angles",
+    "Spacecraft", "State", "ThirdBody", "access_windows", "ecef_to_geodetic", "eci_to_ecef", "eclipse_windows",
+    "load_mission", "look_angles",
     "orbital_elements", "propagate", "state_from_keplerian",
 ]
