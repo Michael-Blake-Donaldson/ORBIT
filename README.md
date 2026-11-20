@@ -193,6 +193,29 @@ impact. A draw that creates invalid initial conditions fails the analysis
 and identifies the trial. Use the locked environment to reproduce a run.
 [NumPy random generator documentation](https://numpy.org/doc/stable/reference/random/generator)
 
+## Export a CCSDS orbit ephemeris
+
+```powershell
+uv run --locked python -m orbit_sim.oem examples/lunar_perturbation.json output/lunar.oem --frame ICRF
+```
+
+The exporter writes a CCSDS OEM 3.0 in plain-text keyword-value notation.
+The plan must specify `epoch_jd_tdb`. The spacecraft states use TDB
+calendar timestamps, Earth-centered Cartesian kilometers, and kilometers
+per second. Choose `ICRF` or `EME2000` to identify the axes already used
+by the mission. The export performs no frame or time-scale conversion
+on the trajectory. Optional `--object-name`, `--object-id`, and
+`--originator` values populate the message metadata.
+
+An impulsive burn starts a new ephemeris segment with the post-burn
+state at the burn epoch. Where the preceding solver step has room for a
+distinct time tag, its segment ends with a dense state evaluated about
+one nanosecond before the burn. An impulse at mission completion can
+produce a final segment containing a single state. Continuous thrust
+boundaries remain within a segment. Coverage ends at mission completion
+or surface impact.
+[CCSDS Orbit Data Messages standard](https://ccsds.org/publications/allpubs/entry/3073/)
+
 ## Mission plan
 
 Plans use UTF-8 JSON. The required fields are:

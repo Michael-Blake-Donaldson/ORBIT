@@ -186,7 +186,11 @@ def _same_time(left: float, right: float) -> bool:
 
 def propagate(mission: Mission) -> Iterator[Sample]:
     """Yield chronological trajectory samples and exact maneuver boundary rows."""
-    for count, sample in enumerate(_propagate(mission), start=1):
+    return _bounded_propagate(mission)
+
+
+def _bounded_propagate(mission: Mission, observe_step: _StepObserver | None = None) -> Iterator[Sample]:
+    for count, sample in enumerate(_propagate(mission, observe_step), start=1):
         if count > MAX_SAMPLES:
             raise SimulationError(f"mission exceeds the {MAX_SAMPLES} telemetry row budget")
         yield sample
