@@ -8,6 +8,7 @@ from collections.abc import Iterable, Iterator
 from math import copysign
 from pathlib import Path
 
+from .access import access_windows
 from .errors import SimulationError
 from .files import atomic_text_output
 from .ground import (
@@ -54,11 +55,13 @@ def _write_csv(mission: Mission, angle: float, station: GroundStation | None, de
 
 def _track_segments(points: Iterable[GeodeticPosition]) -> Iterator[list[_Coordinate]]:
     line: list[_Coordinate] = []
+    mirrored_start = False
     for point in points:
         if point.longitude_deg is None:
-            if line:
+            if line and (len(line) > 1 or not mirrored_start):
                 yield line
             line = []
+            mirrored_start = False
             continue
         longitude = -180.0 if point.longitude_deg == 180 else point.longitude_deg
         coordinate = (longitude, point.latitude_deg)
@@ -77,9 +80,10 @@ def _track_segments(points: Iterable[GeodeticPosition]) -> Iterator[list[_Coordi
                 if len(line) > 1:
                     yield line
                 line = [(-edge, latitude)]
+                mirrored_start = True
         if not line or line[-1] != coordinate:
             line.append(coordinate)
-    if line:
+    if line and (len(line) > 1 or not mirrored_start):
         yield line
 
 
@@ -113,16 +117,27 @@ def _write_geojson(mission: Mission, angle: float, station: GroundStation | None
     return count
 
 
+def _write_access(mission: Mission, angle: float, station: GroundStation, destination: Path) -> int:
+    with atomic_text_output(destination) as file:
+        windows = access_windows(mission, station, angle)
+        writer = csv.writer(file, lineterminator="\n")
+        writer.writerow(("start_s", "end_s", "duration_s"))
+        writer.writerows((window.start_s, window.end_s, window.duration_s) for window in windows)
+    return len(windows)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mission", type=Path, help="version 1 JSON mission plan")
     parser.add_argument("output", type=Path, help="new ground-track output path")
     parser.add_argument("--greenwich-angle-deg", type=float, required=True, help="eastward ECI angle of Greenwich at t=0")
-    parser.add_argument("--format", choices=("csv", "geojson"), default="csv")
+    parser.add_argument("--format", choices=("csv", "geojson", "access"), default="csv")
     parser.add_argument("--station", type=float, nargs=2, metavar=("LAT_DEG", "LON_DEG"), help="ground station position")
     parser.add_argument("--station-height-km", type=float, help="station ellipsoidal height, default 0")
     parser.add_argument("--min-elevation-deg", type=float, help="geometric visibility mask, default 0")
     args = parser.parse_args(argv)
+    if args.format == "access" and args.station is None:
+        parser.error("--format access requires --station")
     if args.station is None and (args.station_height_km is not None or args.min_elevation_deg is not None):
         parser.error("--station-height-km and --min-elevation-deg require --station")
     try:
@@ -135,9 +150,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.format == "csv":
             count = _write_csv(mission, args.greenwich_angle_deg, station, args.output)
             print(f"Exported {count} ground-track rows")
-        else:
+        elif args.format == "geojson":
             count = _write_geojson(mission, args.greenwich_angle_deg, station, args.output)
             print(f"Exported {count} GeoJSON features")
+        else:
+            assert station is not None  # Validated by the argument parser.
+            count = _write_access(mission, args.greenwich_angle_deg, station, args.output)
+            print(f"Exported {count} station access windows")
     except (OSError, ValueError, SimulationError) as exc:
         print(f"ORBIT ground-track error: {str(exc)[:320]!r}", file=sys.stderr)
         return 1

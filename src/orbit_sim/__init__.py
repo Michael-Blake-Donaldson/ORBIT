@@ -1,5 +1,6 @@
 """Public numerical simulation API."""
 
+from .access import AccessWindow, access_windows
 from .errors import SimulationError
 from .ground import (
     GeodeticPosition,
@@ -26,8 +27,8 @@ from .plan import load_mission
 from .propagation import Sample, propagate
 
 __all__ = [
-    "AtmosphericDrag", "EphemerisPoint", "FiniteBurn", "GeodeticPosition", "GroundStation", "Impulse",
+    "AccessWindow", "AtmosphericDrag", "EphemerisPoint", "FiniteBurn", "GeodeticPosition", "GroundStation", "Impulse",
     "Integrator", "KeplerianOrbit", "LookAngles", "Mission", "OrbitalElements", "Sample", "SimulationError",
-    "Spacecraft", "State", "ThirdBody", "ecef_to_geodetic", "eci_to_ecef", "load_mission", "look_angles",
+    "Spacecraft", "State", "ThirdBody", "access_windows", "ecef_to_geodetic", "eci_to_ecef", "load_mission", "look_angles",
     "orbital_elements", "propagate", "state_from_keplerian",
 ]

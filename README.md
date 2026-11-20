@@ -65,6 +65,38 @@ Playback displays recorded samples and connects them with straight segments
 in the selected projection. Long trajectories use fewer points in the
 plots, while the timeline and inspector retain access to every row.
 
+## Export a ground track and station access
+
+The ground-track command takes the eastward angle of Greenwich from the
+mission's inertial x-axis at elapsed time zero. It rotates Earth about the
+shared north axis at the WGS 84 nominal rate. Use an angle that matches your
+initial state and epoch. The examples below use zero to place the J₂
+spacecraft over longitude zero at the start. [NGA WGS 84 reference](https://earth-info.nga.mil/?action=wgs84&dir=wgs84)
+
+```powershell
+uv run --locked python -m orbit_sim.groundtrack examples/j2_precession.json output/j2-ground-track.csv --greenwich-angle-deg 0 --station 0 0 --min-elevation-deg 10
+uv run --locked python -m orbit_sim.groundtrack examples/j2_precession.json output/j2-ground-track.geojson --greenwich-angle-deg 0 --station 0 0 --format geojson
+uv run --locked python -m orbit_sim.groundtrack examples/j2_precession.json output/j2-station-access.csv --greenwich-angle-deg 0 --station 0 0 --min-elevation-deg 10 --format access
+```
+
+- **CSV** includes WGS 84 geodetic latitude, east longitude, and ellipsoidal
+  height at each telemetry time. With a station configured, it also includes
+  azimuth clockwise from true north, elevation, slant range, and a
+  visibility flag. Undefined angles are blank. [ESA topocentric coordinate reference](https://gssc.esa.int/navipedia/index.php/Transformations_between_ECEF_and_ENU_coordinates)
+- **GeoJSON** includes the sampled subpoint track and an optional station
+  marker. It cuts lines at the antimeridian and breaks tracks where longitude
+  is undefined at a pole. Coordinates are longitude first. [GeoJSON specification](https://www.rfc-editor.org/rfc/rfc7946#section-3.1.9)
+- **Access CSV** reports the start, end, and duration of intervals above the
+  station elevation mask. The search brackets crossings and checks for
+  short passes within dense integrator steps, so access does not depend on
+  the telemetry cadence. Windows end at mission completion or surface contact.
+
+Supply station coordinates as geodetic latitude and east longitude in
+degrees, with optional ellipsoidal height in kilometres. The fixed-spin
+geometry covers mission comparison and planning. Precision tracking requires
+Earth orientation data, and radio coverage requires additional terrain,
+refraction, and link-budget models.
+
 ## Mission plan
 
 Plans use UTF-8 JSON. The required fields are:
@@ -240,6 +272,10 @@ The lunar regression test compares against a separate propagation using
 lunar acceleration, and DOP853 with relative tolerance `3e-14`, absolute
 tolerance `1e-13`, and a maximum step of 30 seconds. A withheld Horizons
 vector also checks the four-hour interpolant between samples.
+
+Ground geometry tests use PROJ WGS 84 Cartesian and topocentric reference
+vectors. Station access tests compare timing to a closed-form circular orbit
+and cover a sub-two-second window between telemetry rows. [PROJ topocentric conversion](https://proj.org/en/stable/operations/conversions/topocentric.html)
 
 The profiling command reports median runtime and rows per second after a
 warm-up. It measures the numerical engine and telemetry construction,

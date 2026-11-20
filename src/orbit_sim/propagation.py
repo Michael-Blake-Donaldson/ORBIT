@@ -35,6 +35,7 @@ from .mission import (
 
 _Apsis = Literal["periapsis", "apoapsis"]
 _StepEvent = tuple[float, Literal["impact"] | _Apsis]
+_StepObserver = Callable[[float, float, DenseOutput], None]
 SampleKind = Literal[
     "sample", "pre_burn", "post_burn", "burn_start", "burn_end", "periapsis", "apoapsis", "complete", "impact",
 ]
@@ -195,7 +196,7 @@ def propagate(mission: Mission) -> Iterator[Sample]:
         yield sample
 
 
-def _propagate(mission: Mission) -> Iterator[Sample]:
+def _propagate(mission: Mission, observe_step: _StepObserver | None = None) -> Iterator[Sample]:
     j2 = mission.gravity == "j2"
     dynamics = _with_third_bodies(_dynamics(j2), mission.third_bodies)
     state = np.array((*mission.initial_state.position_km, *mission.initial_state.velocity_km_s))
@@ -249,6 +250,12 @@ def _propagate(mission: Mission) -> Iterator[Sample]:
                         start, initial, solver.t, solver.y, dense, crossed_surface, apsis, report_apsides,
                         segment_dynamics,
                     )
+                if observe_step is not None:
+                    end = step_events[-1][0] if step_events and step_events[-1][1] == "impact" else solver.t
+                    if end > start:
+                        if dense is None:
+                            dense = solver.dense_output()
+                        observe_step(float(start), float(end), dense)
                 event_index = 0
                 while True:
                     cadence = cadence_index * mission.sample_interval_s

@@ -79,6 +79,21 @@ class GroundTrackTests(unittest.TestCase):
         self.assertEqual(pieces[1][1], (175, 30))
         self.assertEqual(pieces[2], [(15, 50)])
 
+    def test_ending_on_the_antimeridian_avoids_a_duplicate_point(self):
+        points = [GeodeticPosition(10, 179, 0), GeodeticPosition(11, -180, 0)]
+        self.assertEqual(list(_track_segments(points)), [[(179, 10), (180, 11)]])
+
+    def test_access_csv_reports_interpolated_contact_window(self):
+        output = self.root / "contact.csv"
+        result = self.launch(output, options=("--format", "access", "--station", "0", "0", "--min-elevation-deg", "10"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with output.open(newline="", encoding="utf-8") as file:
+            (row,) = list(csv.DictReader(file))
+        self.assertEqual(float(row["start_s"]), 0)
+        self.assertEqual(row["end_s"], row["duration_s"])
+        self.assertLess(float(row["end_s"]), 360)
+        self.assertGreater(float(row["end_s"]), 240)
+
     def test_errors_leave_no_partial_output_and_preserve_existing_files(self):
         existing = self.root / "existing.csv"
         existing.write_text("original", encoding="utf-8")
