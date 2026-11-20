@@ -115,6 +115,14 @@ class EclipseTests(unittest.TestCase):
         self.assertGreaterEqual(_visible_fraction(earth, sun, math.nextafter(outer, -math.inf)), 1 - 1e-11)
         self.assertEqual(_visible_fraction(earth, sun, outer), 1)
 
+    def test_sun_normal_projection_matches_half_disc_and_offset_annulus(self):
+        self.assertAlmostEqual(_visible_fraction(math.pi / 2, 0.27, math.pi / 2, projected=True), 0.5, places=11)
+        earth, solar, separation = 0.1, 0.3, 0.08
+        # Projecting the smaller cap onto its own plane gives pi*sin²(earth).
+        expected = 1 - math.pi * math.sin(earth)**2 * math.cos(separation) / (math.pi * math.sin(solar)**2)
+        self.assertAlmostEqual(_visible_fraction(earth, solar, separation, projected=True), expected, places=12)
+        self.assertNotAlmostEqual(_visible_fraction(earth, solar, separation), expected, places=5)
+
     def test_horizons_example_and_exclusive_csv_publication(self):
         expected = eclipse_windows(load_mission(EXAMPLE))
         self.assertEqual([window.kind for window in expected], ["penumbra", "umbra", "penumbra"] * 2)

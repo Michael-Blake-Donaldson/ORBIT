@@ -66,19 +66,24 @@ def _eclipse_margins(position: Array, sun_position: Array, sun_radius: float) ->
     )
 
 
-def _visible_fraction(earth: float, solar: float, separation: float) -> float:
+def _visible_fraction(earth: float, solar: float, separation: float, *, projected: bool = False) -> float:
     if separation >= earth + solar:
         return 1.0
     if separation <= earth - solar:
         return 0.0
 
-    solar_half_sine = sin(solar / 2)
+    solar_scale = sin(solar if projected else solar / 2)
     if separation <= solar - earth:
-        return 1 - (sin(earth / 2) / solar_half_sine)**2
+        if projected:
+            return 1 - (sin(earth) / solar_scale)**2 * cos(separation)
+        return 1 - (sin(earth / 2) / solar_scale)**2
 
-    # Parameterize solar rings by equal solid-angle area, normalized to [0, 1].
-    inner = (sin(abs(earth - separation) / 2) / solar_half_sine)**2
-    outer = (sin(min(solar, earth + separation) / 2) / solar_half_sine)**2
+    # A Sun-normal array weights solid angle by the cosine of the incident ray angle.
+    # The resulting normalized area is sin²(theta)/sin²(solar), versus the half-angle
+    # formula for unweighted solid angle.
+    angle_scale = 1 if projected else 0.5
+    inner = (sin(abs(earth - separation) * angle_scale) / solar_scale)**2
+    outer = (sin(min(solar, earth + separation) * angle_scale) / solar_scale)**2
     fully_hidden = inner if separation < earth else 0.0
     sin_separation = sin(separation)
     cos_separation = cos(separation)
@@ -86,9 +91,14 @@ def _visible_fraction(earth: float, solar: float, separation: float) -> float:
     cos_gap = -2 * sin((earth + separation) / 2) * sin((earth - separation) / 2)
 
     def ring_coverage(area: float) -> float:
-        half_sine = solar_half_sine * sqrt(area)
-        ring_sine = 2 * half_sine * sqrt(1 - half_sine**2)
-        edge = (cos_gap + 2 * cos_separation * half_sine**2) / (sin_separation * ring_sine)
+        radial = solar_scale * sqrt(area)
+        if projected:
+            ring_sine = radial
+            one_minus_cosine = radial**2 / (1 + sqrt(1 - radial**2))
+        else:
+            ring_sine = 2 * radial * sqrt(1 - radial**2)
+            one_minus_cosine = 2 * radial**2
+        edge = (cos_gap + cos_separation * one_minus_cosine) / (sin_separation * ring_sine)
         return acos(max(-1.0, min(1.0, edge))) / pi
 
     partial = 0.0
