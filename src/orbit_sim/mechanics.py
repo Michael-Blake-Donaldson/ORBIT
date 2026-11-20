@@ -55,14 +55,19 @@ def _radial_motion(state: Array) -> float:
     return float(state[:3] @ state[3:])
 
 
-def _drag_acceleration(state: Array, drag: AtmosphericDrag, mass_kg: float) -> Array:
+def _drag_parameters(state: Array, drag: AtmosphericDrag, mass_kg: float) -> tuple[Array, float, bool]:
     x, y, _, vx, vy, vz = state
-    relative = (vx + EARTH_ROTATION_RAD_S * y, vy - EARTH_ROTATION_RAD_S * x, vz)
-    excess_altitude = max(0.0, _altitude(state) - drag.reference_altitude_km)
-    density = drag.reference_density_kg_m3 * exp(-excess_altitude / drag.scale_height_km)
-    # The speed factor uses m/s with SI density and area. The vector retains km/s.
-    inverse_time = -0.5 * density * drag.coefficient * drag.area_m2 * (1000 * hypot(*relative)) / mass_kg
-    return np.array(relative) * inverse_time
+    relative = np.array((vx + EARTH_ROTATION_RAD_S * y, vy - EARTH_ROTATION_RAD_S * x, vz))
+    excess_altitude = _altitude(state) - drag.reference_altitude_km
+    density = drag.reference_density_kg_m3 * exp(-max(0.0, excess_altitude) / drag.scale_height_km)
+    # Convert the relative speed to m/s for SI density and area.
+    scale = -500 * density * drag.coefficient * drag.area_m2 / mass_kg
+    return relative, scale, excess_altitude > 0
+
+
+def _drag_acceleration(state: Array, drag: AtmosphericDrag, mass_kg: float) -> Array:
+    relative, scale, _ = _drag_parameters(state, drag, mass_kg)
+    return (scale * hypot(*relative)) * relative
 
 
 @dataclass(frozen=True, slots=True)

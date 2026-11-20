@@ -211,8 +211,12 @@ the variational equations along ORBIT's dense nominal trajectory for
 point-mass Earth gravity, J₂, and prescribed third-body ephemerides.
 Fixed inertial impulses keep the matrix continuous across the velocity
 jump. RTN impulses differentiate the local orbital frame using the
-pre-burn state. The supported force models exclude drag and finite
-thrust. At a surface impact or apsis, the matrix describes the
+pre-burn state. Finite thrust follows the nominal mass history and
+includes rotation of an RTN thrust vector. The drag gradient includes
+atmospheric co-rotation and the exponential density variation. At the
+reference altitude it uses the derivative of the constant-density
+branch. Vehicle mass and force model parameters are prescribed.
+At a surface impact or apsis, the matrix describes the
 state at the nominal event time. The derivative of the event time is a
 separate quantity.
 [NASA state and covariance propagation reference](https://ntrs.nasa.gov/api/citations/20240004259/downloads/GEONSMS_R3_0_NASA-TP-20240004259.pdf)

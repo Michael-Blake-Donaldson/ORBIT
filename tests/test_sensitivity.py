@@ -10,8 +10,11 @@ from pathlib import Path
 import numpy as np
 
 from orbit_sim import (
+    AtmosphericDrag,
+    FiniteBurn,
     Impulse,
     Mission,
+    Spacecraft,
     State,
     load_initial_uncertainty,
     load_mission,
@@ -19,7 +22,9 @@ from orbit_sim import (
     propagate_covariance,
     propagate_state_transition,
 )
-from orbit_sim.mission import EARTH_MU_KM3_S2
+from orbit_sim.mechanics import _drag_acceleration
+from orbit_sim.mission import EARTH_MU_KM3_S2, EARTH_RADIUS_KM, EARTH_ROTATION_RAD_S
+from orbit_sim.sensitivity import _drag_partials
 
 _INITIAL = State((7000, 0, 0), (0, 7.5, 0))
 _EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
@@ -119,14 +124,50 @@ class StateTransitionTests(unittest.TestCase):
                 rtol=1e-6, atol=2e-9,
             )
 
-    def test_rejects_force_and_maneuver_models_without_a_jacobian(self):
-        missions = (
-            load_mission(_EXAMPLES / "orbital_decay.json"),
-            load_mission(_EXAMPLES / "finite_burn.json"),
+    def test_drag_partials_match_force_on_either_side_of_density_cap(self):
+        drag = AtmosphericDrag(300, 1e-9, 55, 3, 2.2)
+        mass = 50
+        for altitude in (250, 350):
+            with self.subTest(altitude=altitude):
+                state = np.array([EARTH_RADIUS_KM + altitude, 135, -54, 0.73, 7.25, -0.44])
+                gradient = np.hstack(_drag_partials(state, drag, mass))
+                steps = (0.001, 0.001, 0.001, 1e-5, 1e-5, 1e-5)
+                for column, step in enumerate(steps):
+                    offset = step * np.eye(6)[column]
+                    difference = _drag_acceleration(state + offset, drag, mass) - _drag_acceleration(
+                        state - offset, drag, mass,
+                    )
+                    np.testing.assert_allclose(gradient[:, column], difference / (2 * step), rtol=1e-6, atol=2e-16)
+
+        radius = EARTH_RADIUS_KM + 315
+        co_rotating = np.array([radius, 0, 0, 0, EARTH_ROTATION_RAD_S * radius, 0])
+        np.testing.assert_array_equal(np.hstack(_drag_partials(co_rotating, drag, mass)), np.zeros((3, 6)))
+
+    def test_mixed_finite_burns_and_drag_follow_mass_and_force_switches(self):
+        mission = Mission(
+            State((6740, 80, 100), (-0.05, 7.65, 0.65)), 1250, 31,
+            gravity="j2", drag=AtmosphericDrag(325, 3e-9, 60, 8, 2.3),
+            spacecraft=Spacecraft(600, 300, 320),
+            finite_burns=(
+                FiniteBurn(0, 350, (25, 90, -30), "ECI"),
+                FiniteBurn(350, 650, (-20, 180, 75), "RTN"),
+            ),
+            impulses=(Impulse(350, (0.02, 0.12, -0.05), frame="RTN"),),
         )
-        for mission in missions:
-            with self.subTest(mission=mission), self.assertRaisesRegex(ValueError, "impulsive thrust"):
-                next(propagate_state_transition(mission))
+        rows = list(propagate_state_transition(mission))
+        self.assertEqual([row.sample for row in rows], list(propagate(mission)))
+        boundary = [row for row in rows if row.sample.time_s == 350]
+        self.assertEqual([row.sample.kind for row in boundary], ["burn_end", "pre_burn", "post_burn", "burn_start"])
+        self.assertEqual(boundary[0].matrix_eci, boundary[1].matrix_eci)
+        self.assertEqual(boundary[2].matrix_eci, boundary[3].matrix_eci)
+        self.assertNotEqual(boundary[1].matrix_eci, boundary[2].matrix_eci)
+        self.assertEqual(rows[-1].sample.kind, "complete")
+        terminal_matrix = np.asarray(rows[-1].matrix_eci)
+        for column, step in enumerate((0.015, 0.015, 0.015, 2e-5, 2e-5, 2e-5)):
+            offset = step * np.eye(6)[column]
+            np.testing.assert_allclose(
+                terminal_matrix @ offset, _centered_state_difference(mission, offset), rtol=2e-6, atol=5e-9,
+            )
 
     def test_rank_one_covariance_follows_two_independent_hohmann_trajectories(self):
         mission = load_mission(_EXAMPLES / "hohmann.json")

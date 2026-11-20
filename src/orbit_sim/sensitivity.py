@@ -9,13 +9,20 @@ from scipy.integrate import DOP853, DenseOutput
 
 from .ephemeris import _position_interpolant, _relative_geometry
 from .errors import SimulationError
-from .mechanics import _J2_FACTOR, Array, _cross, _rtn_basis
-from .mission import EARTH_MU_KM3_S2, Mission, State, Vector
-from .propagation import Sample, _bounded_propagate
+from .mechanics import _J2_FACTOR, Array, _cross, _drag_parameters, _rtn_basis
+from .mission import (
+    EARTH_MU_KM3_S2,
+    EARTH_ROTATION_RAD_S,
+    AtmosphericDrag,
+    Mission,
+    Vector,
+)
+from .propagation import Sample, _bounded_propagate, _ThrustArc
 from .uncertainty import Covariance, _validated_covariance
 
 _IDENTITY_3 = np.eye(3)
 _Z_AXIS = np.array([0.0, 0.0, 1.0])
+_RELATIVE_VELOCITY_POSITION = EARTH_ROTATION_RAD_S * np.array([[0, 1, 0], [-1, 0, 0], [0, 0, 0]])
 _STM_ATOL = 1e-12
 _MAX_STM_STEPS = 100_000
 
@@ -79,9 +86,7 @@ def _cross_matrix(vector: Array) -> Array:
     return np.array([[0, -z, y], [z, 0, -x], [-y, x, 0]])
 
 
-def _rtn_vector_partials(state: State, components: Vector) -> tuple[Array, Array]:
-    position = np.asarray(state.position_km)
-    velocity = np.asarray(state.velocity_km_s)
+def _rtn_vector_partials(position: Array, velocity: Array, components: Vector) -> tuple[Array, Array]:
     basis = _rtn_basis(position, velocity)
     if basis is None:
         raise SimulationError("RTN sensitivity requires a non-radial state")
@@ -97,21 +102,60 @@ def _rtn_vector_partials(state: State, components: Vector) -> tuple[Array, Array
     return radial_weight @ radial_position + normal_weight @ normal_position, normal_weight @ normal_velocity
 
 
+def _drag_partials(state: Array, drag: AtmosphericDrag, mass: float) -> tuple[Array, Array]:
+    relative, scale, density_varies = _drag_parameters(state, drag, mass)
+    speed = hypot(*relative)
+    if speed == 0:
+        return np.zeros((3, 3)), np.zeros((3, 3))
+    direction = relative / speed
+    velocity_partial = (scale * speed) * (_IDENTITY_3 + np.outer(direction, direction))
+    position_partial = velocity_partial @ _RELATIVE_VELOCITY_POSITION
+    if density_varies:
+        position = state[:3]
+        density_log_gradient = -position / (drag.scale_height_km * hypot(*position))
+        position_partial += np.outer((scale * speed) * relative, density_log_gradient)
+    return position_partial, velocity_partial
+
+
 class _VariationalSolver:
     def __init__(self, mission: Mission) -> None:
         self.gravity_gradient = _gravity_gradient(mission)
+        self.drag = mission.drag
+        self.spacecraft = mission.spacecraft
+        self.mass = self.spacecraft.initial_mass_kg if self.spacecraft is not None else None
+        self.burns = {burn.start_s: burn for burn in mission.finite_burns}
+        self.arc: _ThrustArc | None = None
         self.rtol = mission.integrator.relative_tolerance
         self.matrix = np.eye(6)
         self.time = 0.0
         self.steps = 0
         self.dense_steps: list[DenseOutput] = []
 
+    def force_boundary(self, sample: Sample) -> None:
+        if sample.kind == "burn_start":
+            assert self.spacecraft is not None and sample.mass_kg is not None
+            self.arc = _ThrustArc.from_burn(self.burns[sample.time_s], sample.mass_kg, self.spacecraft.isp_s)
+        elif sample.kind in ("burn_end", "post_burn"):
+            self.arc = None
+            self.mass = sample.mass_kg
+
+    def acceleration_derivative(self, time: float, state: Array, matrix: Array) -> Array:
+        position = state[:3]
+        change = self.gravity_gradient(time, position) @ matrix[:3]
+        mass = self.arc.mass_at(time) if self.arc is not None else self.mass
+        if self.drag is not None and mass is not None:
+            position_partial, velocity_partial = _drag_partials(state, self.drag, mass)
+            change += position_partial @ matrix[:3] + velocity_partial @ matrix[3:]
+        if self.arc is not None and self.arc.burn.frame == "RTN" and mass is not None:
+            position_partial, velocity_partial = _rtn_vector_partials(position, state[3:], self.arc.burn.thrust_n)
+            change += (position_partial @ matrix[:3] + velocity_partial @ matrix[3:]) / (1000 * mass)
+        return change
+
     def advance(self, start: float, end: float, nominal: DenseOutput) -> None:
         def derivative(time: float, flat: Array) -> Array:
             matrix = flat.reshape(6, 6)
-            gravity = self.gravity_gradient(time, nominal(time)[:3])
-            # A = [[0, I], [da/dr, 0]] and dPhi/dt = A Phi.
-            return np.vstack((matrix[3:], gravity @ matrix[:3])).reshape(-1)
+            # A = [[0, I], [da/dr, da/dv]] and dPhi/dt = A Phi.
+            return np.vstack((matrix[3:], self.acceleration_derivative(time, nominal(time), matrix))).reshape(-1)
 
         # Integrate over one accepted nominal step. This keeps dense interpolation
         # bounded to a single trajectory step and restarts at force model knots.
@@ -142,8 +186,6 @@ class _VariationalSolver:
 
 def propagate_state_transition(mission: Mission) -> Iterator[StateTransition]:
     """Stream fixed-epoch ECI sensitivities in the order x, y, z, vx, vy, vz."""
-    if mission.drag is not None or mission.finite_burns:
-        raise ValueError("state transition propagation supports conservative gravity and impulsive thrust")
     variational = _VariationalSolver(mission)
     rtn_impulses = {burn.time_s: burn.delta_v_km_s for burn in mission.impulses if burn.frame == "RTN"}
     for sample in _bounded_propagate(mission, variational.advance):
@@ -152,10 +194,13 @@ def propagate_state_transition(mission: Mission) -> Iterator[StateTransition]:
             raise SimulationError(f"state transition overflowed at t={sample.time_s:g} s")
         yield StateTransition(sample, _matrix_tuple(matrix))
         if sample.kind == "pre_burn" and (delta_v := rtn_impulses.get(sample.time_s)) is not None:
-            position_partial, velocity_partial = _rtn_vector_partials(sample.state, delta_v)
+            position = np.asarray(sample.state.position_km)
+            velocity = np.asarray(sample.state.velocity_km_s)
+            position_partial, velocity_partial = _rtn_vector_partials(position, velocity, delta_v)
             # An RTN command depends on the pre-burn state. An inertial command has identity jump.
             transition = variational.matrix
             transition[3:] += position_partial @ transition[:3] + velocity_partial @ transition[3:]
+        variational.force_boundary(sample)
 
 
 def propagate_covariance(mission: Mission, initial_covariance_eci: Covariance) -> Iterator[CovarianceSample]:

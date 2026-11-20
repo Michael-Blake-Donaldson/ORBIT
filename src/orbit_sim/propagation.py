@@ -67,6 +67,11 @@ class _ThrustArc:
     initial_mass_kg: float
     flow_kg_s: float
 
+    @classmethod
+    def from_burn(cls, burn: FiniteBurn, initial_mass_kg: float, isp_s: float) -> "_ThrustArc":
+        flow = hypot(*burn.thrust_n) / (1000 * STANDARD_GRAVITY_KM_S2 * isp_s)
+        return cls(burn, initial_mass_kg, flow)
+
     def mass_at(self, time: float) -> float:
         return self.initial_mass_kg - self.flow_kg_s * (time - self.burn.start_s)
 
@@ -310,8 +315,7 @@ def _propagate(mission: Mission, observe_step: _StepObserver | None = None) -> I
 
         burn = events.ignition
         if burn is not None and spacecraft is not None and mass is not None:
-            flow = hypot(*burn.thrust_n) / (1000 * STANDARD_GRAVITY_KM_S2 * spacecraft.isp_s)
-            arc = _ThrustArc(burn, mass, flow)
+            arc = _ThrustArc.from_burn(burn, mass, spacecraft.isp_s)
             if arc.mass_at(burn.end_s) < spacecraft.dry_mass_kg:
                 raise SimulationError(f"finite burn at t={time:g} s would reduce mass below dry mass")
             yield _sample(time, "burn_start", state, j2, mass)
