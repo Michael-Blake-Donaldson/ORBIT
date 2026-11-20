@@ -36,16 +36,25 @@ from .mission import (
 from .plan import load_mission
 from .power import PowerSample, battery_budget, mission_power_budget
 from .propagation import Sample, propagate
+from .uncertainty import (
+    EnsembleSummary,
+    InitialUncertainty,
+    TrialOutcome,
+    run_ensemble,
+    summarize_ensemble,
+)
 
 __all__ = [
     "AccessWindow",
     "AtmosphericDrag",
     "EclipseWindow",
+    "EnsembleSummary",
     "EphemerisPoint",
     "FiniteBurn",
     "GeodeticPosition",
     "GroundStation",
     "Impulse",
+    "InitialUncertainty",
     "Integrator",
     "KeplerianOrbit",
     "LoadChange",
@@ -61,6 +70,7 @@ __all__ = [
     "State",
     "ThirdBody",
     "TrajectoryDelta",
+    "TrialOutcome",
     "access_windows",
     "battery_budget",
     "compare_trajectories",
@@ -72,7 +82,9 @@ __all__ = [
     "mission_power_budget",
     "orbital_elements",
     "propagate",
+    "run_ensemble",
     "solar_samples",
     "solar_visibility_fraction",
     "state_from_keplerian",
+    "summarize_ensemble",
 ]
