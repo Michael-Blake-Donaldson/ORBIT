@@ -8,6 +8,14 @@
   "duration_s": 10800,
   "sample_interval_s": 5,
   "gravity": "j2",
+  "power_system": {
+    "array_power_w_at_1_au": 185,
+    "load_w": 100,
+    "battery_capacity_wh": 85,
+    "initial_charge_wh": 45,
+    "charge_efficiency": 0.94,
+    "discharge_efficiency": 0.92
+  },
   "third_bodies": [
     {
       "name": "Sun",

@@ -177,6 +177,35 @@ class AtmosphericDrag:
 
 
 @dataclass(frozen=True, slots=True)
+class PowerSystem:
+    """Sun-tracking array, constant bus demand, and an energy-limited battery."""
+
+    array_power_w_at_1_au: float
+    load_w: float
+    battery_capacity_wh: float
+    initial_charge_wh: float
+    charge_efficiency: float = 1.0
+    discharge_efficiency: float = 1.0
+    analysis_interval_s: float = 60.0
+    sun_name: str = "Sun"
+
+    def __post_init__(self) -> None:
+        capacity = number(self.battery_capacity_wh, "battery_capacity_wh", 0, 1e9)
+        object.__setattr__(self, "battery_capacity_wh", capacity)
+        for field, lower, upper in (
+            ("array_power_w_at_1_au", 0, 1e8),
+            ("load_w", 0, 1e8),
+            ("initial_charge_wh", 0, capacity),
+            ("charge_efficiency", 0.01, 1),
+            ("discharge_efficiency", 0.01, 1),
+            ("analysis_interval_s", 0.25, 120),
+        ):
+            object.__setattr__(self, field, number(getattr(self, field), field, lower, upper))
+        if not isinstance(self.sun_name, str) or not 1 <= len(self.sun_name) <= 48 or not self.sun_name.isprintable():
+            raise ValueError("sun_name must contain 1 to 48 printable characters")
+
+
+@dataclass(frozen=True, slots=True)
 class Integrator:
     relative_tolerance: float = 1e-11
     position_tolerance_km: float = 1e-8
@@ -207,6 +236,7 @@ class Mission:
     track_apsides: bool = False
     third_bodies: tuple[ThirdBody, ...] = ()
     epoch_jd_tdb: float | None = None
+    power_system: PowerSystem | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.initial_state, State):
@@ -235,7 +265,13 @@ class Mission:
         interval = number(self.sample_interval_s, "sample_interval_s", 1e-3, 2_592_000)
         object.__setattr__(self, "duration_s", duration)
         object.__setattr__(self, "sample_interval_s", interval)
-        object.__setattr__(self, "third_bodies", self._validated_third_bodies(duration))
+        bodies = self._validated_third_bodies(duration)
+        object.__setattr__(self, "third_bodies", bodies)
+        if self.power_system is not None:
+            if not isinstance(self.power_system, PowerSystem):
+                raise TypeError("power_system must be a PowerSystem")
+            if not any(body.name.casefold() == self.power_system.sun_name.casefold() for body in bodies):
+                raise ValueError("power_system requires its selected Sun ephemeris in third_bodies")
 
         if not isinstance(self.impulses, (tuple, list)) or len(self.impulses) > 1000:
             raise ValueError("impulses must contain at most 1000 entries")

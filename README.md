@@ -124,6 +124,30 @@ The example uses one-hour geometric Sun vectors from JPL Horizons target
 00:00 TDB. Import additional epochs with the same workflow as the lunar
 example. `--sun-name` selects a differently named ephemeris.
 
+## Estimate solar generation and battery charge
+
+```powershell
+uv run --locked python -m orbit_sim.power_budget examples/solar_eclipses.json output/solar-power-budget.csv
+```
+
+The optional `power_system` block specifies array output at 1 AU
+(`array_power_w_at_1_au`), constant bus demand (`load_w`),
+`battery_capacity_wh`, and `initial_charge_wh`. Optional
+`charge_efficiency` and `discharge_efficiency` default to 1. The array
+tracks the Sun and uses the inverse-square distance law. During partial
+eclipse, it weights the visible part of the Sun by the incidence angle
+of its rays. [NASA spacecraft power reference](https://www.nasa.gov/smallsat-institute/sst-soa/power-subsystems/)
+
+The power analysis samples the dense trajectory independently of the
+flight telemetry interval. It includes exact eclipse boundaries and
+uses at most one-second spacing in penumbra. Between observations, it
+integrates linearly interpolated power. `analysis_interval_s` defaults
+to 60 seconds. Reduce it for convergence checks. The CSV reports
+instantaneous power, stored charge, and cumulative generated, demanded,
+curtailed, unserved, and lost energy. This model describes energy
+capacity with constant efficiency and unconstrained charge and discharge
+rates.
+
 ## Mission plan
 
 Plans use UTF-8 JSON. The required fields are:
@@ -146,6 +170,7 @@ Optional fields:
 | `drag` | Optional local atmosphere with `reference_altitude_km`, `reference_density_kg_m3`, `scale_height_km`, `area_m2`, and `coefficient` (default `2.2`). Requires spacecraft mass. |
 | `third_bodies` | Up to eight objects with a unique `name`, `mu_km3_s2`, `ephemeris`, and optional `minimum_separation_km` (default `1`). |
 | `epoch_jd_tdb` | Optional Julian date in TDB for elapsed time zero. The Horizons importer uses it to align successive imports. |
+| `power_system` | Optional solar generation and battery model. Requires a Sun ephemeris under `third_bodies`. |
 | `track_apsides` | Boolean, default `false`. Detect distinct radial turning points during coasts and add `periapsis` and `apoapsis` rows. |
 | `integrator` | Optional overrides for `relative_tolerance` (default `1e-11`), `position_tolerance_km` (`1e-8`), `velocity_tolerance_km_s` (`1e-11`), and `max_step_s` (`120`). |
 
@@ -307,6 +332,8 @@ and cover a sub-two-second window between telemetry rows. [PROJ topocentric conv
 Eclipse tests compare ingress and egress against closed-form common
 tangents, exercise a grazing penumbra and annular eclipse, and check
 visible solar solid angle against a spherical-lens calculation.
+Power tests check inverse-square scaling, separate efficiencies, battery
+limits, and conservation of energy at each output row.
 
 The profiling command reports median runtime and rows per second after a
 warm-up. It measures the numerical engine and telemetry construction,

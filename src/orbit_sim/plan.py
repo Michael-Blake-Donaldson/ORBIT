@@ -17,6 +17,7 @@ from .mission import (
     Integrator,
     KeplerianOrbit,
     Mission,
+    PowerSystem,
     Spacecraft,
     State,
     ThirdBody,
@@ -25,7 +26,7 @@ from .mission import (
 _MAX_PLAN_BYTES = 256 * 1024
 _Config = TypeVar(
     "_Config",
-    AtmosphericDrag, EphemerisPoint, FiniteBurn, Impulse, Integrator, KeplerianOrbit, Mission, Spacecraft, State,
+    AtmosphericDrag, EphemerisPoint, FiniteBurn, Impulse, Integrator, KeplerianOrbit, Mission, PowerSystem, Spacecraft, State,
     ThirdBody,
 )
 
@@ -118,4 +119,6 @@ def _parse_mission(values: dict[str, object]) -> Mission:
         values["drag"] = _construct(AtmosphericDrag, values["drag"])
     if "third_bodies" in values:
         values["third_bodies"] = _load_third_bodies(values["third_bodies"])
+    if "power_system" in values:
+        values["power_system"] = _construct(PowerSystem, values["power_system"])
     return _construct(Mission, values)
