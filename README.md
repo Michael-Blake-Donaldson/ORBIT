@@ -63,6 +63,8 @@ idempotency key and exact plan reuse the existing job. Reusing that key
 with a different plan returns a conflict.
 
 The Java process runs at most two simulations and queues eight more.
+Each owner can have up to four queued or running jobs and 16 retained
+records. Repeating a submission key does not consume another slot.
 It retains up to 64 job records in `orbit-job-store-v1` under the spool
 directory. Use a service-owned directory on a local filesystem that
 supports exclusive locks and atomic renames. Keep it outside web asset

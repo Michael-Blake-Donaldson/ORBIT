@@ -27,7 +27,7 @@ _MAX_CSV_BYTES = 4 * 1024 * 1024
 _TIMEOUT_S = 15
 _JOB_PATH = re.compile(r"/api/jobs/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}(?:/telemetry)?")
 _JOB_ERRORS = {400: "Bad Request", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed",
-               409: "Conflict", 413: "Content Too Large", 415: "Unsupported Media Type",
+               409: "Conflict", 413: "Content Too Large", 415: "Unsupported Media Type", 429: "Too Many Requests",
                500: "Internal Server Error", 503: "Service Unavailable"}
 _ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),

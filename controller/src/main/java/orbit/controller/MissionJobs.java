@@ -23,6 +23,8 @@ final class MissionJobs implements AutoCloseable {
     static final int MAX_PLAN_BYTES = 256 * 1024;
     static final int MAX_RESULT_BYTES = 4 * 1024 * 1024;
     static final int MAX_RESULT_ROWS = 4_000;
+    private static final int MAX_ACTIVE_PER_OWNER = 4;
+    private static final int MAX_RETAINED_PER_OWNER = 16;
     private static final Pattern KEY = Pattern.compile("[A-Za-z0-9_-]{16,80}");
     private static final Pattern OWNER = Pattern.compile("[A-Za-z0-9_-]{1,128}");
 
@@ -143,6 +145,9 @@ final class MissionJobs implements AutoCloseable {
         OwnerKey ownerKey = new OwnerKey(owner, key);
         Job existing = keys.get(ownerKey);
         if (existing != null) {
+            if (existing.isExpired(clock.instant())) {
+                throw new JobException(503, "The previous job is awaiting storage cleanup.");
+            }
             if (!Arrays.equals(existing.hash, hash)) {
                 throw new JobException(409, "This idempotency key is already bound to a different plan.");
             }
@@ -151,6 +156,7 @@ final class MissionJobs implements AutoCloseable {
         if (jobs.size() >= maxEntries) {
             throw new JobException(503, "The job store is at capacity. Try again later.");
         }
+        checkOwnerCapacity(owner);
 
         Job job = new Job(UUID.randomUUID(), ownerKey, hash, plan.clone());
         store.create(job.id);
@@ -173,13 +179,11 @@ final class MissionJobs implements AutoCloseable {
         return job.snapshot();
     }
 
-    synchronized Snapshot status(String owner, UUID id) throws JobException, IOException {
-        expire();
+    synchronized Snapshot status(String owner, UUID id) throws JobException {
         return find(owner, id).snapshot();
     }
 
     synchronized Snapshot cancel(String owner, UUID id) throws JobException, IOException {
-        expire();
         Job job = find(owner, id);
         cancel(job);
         return job.snapshot();
@@ -198,7 +202,6 @@ final class MissionJobs implements AutoCloseable {
     }
 
     synchronized byte[] result(String owner, UUID id) throws JobException, IOException {
-        expire();
         Job job = find(owner, id);
         if (job.state != State.COMPLETE) {
             throw new JobException(409, "Telemetry is available only for successfully completed jobs.");
@@ -211,23 +214,51 @@ final class MissionJobs implements AutoCloseable {
         }
     }
 
-    synchronized void expire() throws IOException {
+    private void checkOwnerCapacity(String owner) throws JobException {
+        int retained = 0;
+        int active = 0;
+        for (Job job : jobs.values()) {
+            if (job.key.owner().equals(owner)) {
+                retained++;
+                if (!job.state.terminal()) {
+                    active++;
+                }
+            }
+        }
+        if (active >= MAX_ACTIVE_PER_OWNER) {
+            throw new JobException(429, "You already have four active mission jobs.");
+        }
+        if (retained >= MAX_RETAINED_PER_OWNER) {
+            throw new JobException(429, "Your retained job limit is full. Try again after older jobs expire.");
+        }
+    }
+
+    synchronized void expire() {
         Instant now = clock.instant();
         var entries = jobs.values().iterator();
         while (entries.hasNext()) {
             Job job = entries.next();
-            if (job.expires != null && !job.expires.isAfter(now)) {
-                store.delete(job.id);
-                keys.remove(job.key);
-                entries.remove();
+            if (!job.isExpired(now)) {
+                continue;
             }
+            try {
+                store.delete(job.id);
+            } catch (IOException ignored) {
+                if (!job.cleanupFailed) {
+                    LOG.log(System.Logger.Level.WARNING, "Could not remove an expired mission job. Cleanup will retry.");
+                    job.cleanupFailed = true;
+                }
+                continue;
+            }
+            keys.remove(job.key);
+            entries.remove();
         }
     }
 
     private Job find(String owner, UUID id) throws JobException {
         requireOwner(owner);
         Job job = jobs.get(id);
-        if (job == null || !job.key.owner().equals(owner)) {
+        if (job == null || !job.key.owner().equals(owner) || job.isExpired(clock.instant())) {
             throw new JobException(404, "Mission job not found.");
         }
         return job;
@@ -293,6 +324,7 @@ final class MissionJobs implements AutoCloseable {
         private State state = State.QUEUED;
         private Thread thread;
         private Instant expires;
+        private boolean cleanupFailed;
         private MissionController.Receipt receipt;
         private String failure;
         private byte[] telemetryDigest;
@@ -306,6 +338,10 @@ final class MissionJobs implements AutoCloseable {
 
         Snapshot snapshot() {
             return new Snapshot(id, state, receipt, failure);
+        }
+
+        boolean isExpired(Instant now) {
+            return expires != null && !expires.isAfter(now);
         }
 
         void checkpoint(State next, Instant expiration, String message, byte[] artifact) throws IOException {

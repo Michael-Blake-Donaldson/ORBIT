@@ -100,6 +100,10 @@ class MissionJobsTest {
             var completed = terminal(jobs, jobs.submit(OWNER, FIRST, PLAN).id());
             assertArrayEquals(CSV, jobs.result(OWNER, completed.id()));
             time.set(Instant.EPOCH.plus(Duration.ofMinutes(1)));
+            assertEquals(404, assertThrows(MissionJobs.JobException.class,
+                    () -> jobs.status(OWNER, completed.id())).status());
+            assertEquals(404, assertThrows(MissionJobs.JobException.class,
+                    () -> jobs.cancel(OWNER, completed.id())).status());
             jobs.expire();
             assertEquals(404, assertThrows(MissionJobs.JobException.class,
                     () -> jobs.result(OWNER, completed.id())).status());
@@ -107,6 +111,40 @@ class MissionJobsTest {
                 assertTrue(paths.noneMatch(path -> path.endsWith("job.properties") || path.endsWith("telemetry.csv")));
             }
             assertEquals(MissionJobs.State.COMPLETE, terminal(jobs, jobs.submit(OWNER, FIRST, PLAN).id()).state());
+        }
+    }
+
+    @Test
+    void activeOwnerLimitPreservesCapacityForOtherOwnersAndAllowsRetries() throws Exception {
+        CountDownLatch hold = new CountDownLatch(1);
+        try (var jobs = new MissionJobs(spool, 1, 8, 32, Duration.ofMinutes(1), Clock.systemUTC(), (plan, telemetry) -> {
+            hold.await();
+            return null;
+        })) {
+            UUID first = jobs.submit(OWNER, FIRST, PLAN).id();
+            jobs.submit(OWNER, SECOND, PLAN);
+            jobs.submit(OWNER, THIRD, PLAN);
+            jobs.submit(OWNER, "example-run-key-04", PLAN);
+            assertEquals(first, jobs.submit(OWNER, FIRST, PLAN).id());
+            assertEquals(429, assertThrows(MissionJobs.JobException.class,
+                    () -> jobs.submit(OWNER, "example-run-key-05", PLAN)).status());
+            assertEquals(MissionJobs.State.QUEUED, jobs.submit("another-owner", FIRST, PLAN).state());
+        }
+    }
+
+    @Test
+    void retainedOwnerLimitDoesNotFillTheSharedStore() throws Exception {
+        try (var jobs = new MissionJobs(spool, 1, 8, 32, Duration.ofMinutes(1), Clock.systemUTC(), (plan, telemetry) -> {
+            Files.write(telemetry, CSV);
+            return new MissionController.Receipt("complete", 0, 1);
+        })) {
+            for (int index = 0; index < 16; index++) {
+                assertEquals(MissionJobs.State.COMPLETE,
+                        terminal(jobs, jobs.submit(OWNER, "retention-example-" + index, PLAN).id()).state());
+            }
+            assertEquals(429, assertThrows(MissionJobs.JobException.class, () -> jobs.submit(OWNER, FIRST, PLAN)).status());
+            assertEquals(MissionJobs.State.COMPLETE,
+                    terminal(jobs, "another-owner", jobs.submit("another-owner", FIRST, PLAN).id()).state());
         }
     }
 
@@ -228,11 +266,15 @@ class MissionJobsTest {
     }
 
     private static MissionJobs.Snapshot terminal(MissionJobs jobs, UUID id) throws Exception {
+        return terminal(jobs, OWNER, id);
+    }
+
+    private static MissionJobs.Snapshot terminal(MissionJobs jobs, String owner, UUID id) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        MissionJobs.Snapshot current = jobs.status(OWNER, id);
+        MissionJobs.Snapshot current = jobs.status(owner, id);
         while (!current.state().terminal() && System.nanoTime() < deadline) {
             Thread.sleep(10);
-            current = jobs.status(OWNER, id);
+            current = jobs.status(owner, id);
         }
         assertTrue(current.state().terminal());
         return current;

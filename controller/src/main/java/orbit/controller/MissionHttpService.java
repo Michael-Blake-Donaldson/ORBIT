@@ -43,19 +43,11 @@ final class MissionHttpService implements AutoCloseable {
         server.setExecutor(requests);
         server.createContext("/", this::handle);
         server.start();
-        maintenance.scheduleWithFixedDelay(this::prune, 30, 30, TimeUnit.SECONDS);
+        maintenance.scheduleWithFixedDelay(jobs::expire, 30, 30, TimeUnit.SECONDS);
     }
 
     int port() {
         return server.getAddress().getPort();
-    }
-
-    private void prune() {
-        try {
-            jobs.expire();
-        } catch (IOException ignored) {
-            LOG.log(System.Logger.Level.WARNING, "An expired artifact could not be removed.");
-        }
     }
 
     private void handle(HttpExchange exchange) throws IOException {
