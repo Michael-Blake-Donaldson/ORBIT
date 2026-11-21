@@ -131,7 +131,7 @@ public final class MissionController {
         worker.waitFor(5, TimeUnit.SECONDS);
     }
 
-    private static Receipt readReceipt(Path telemetry, int maxRows, int maxBytes) throws IOException {
+    static Receipt readReceipt(Path telemetry, int maxRows, int maxBytes) throws IOException {
         if (!Files.isRegularFile(telemetry, LinkOption.NOFOLLOW_LINKS) || Files.size(telemetry) > maxBytes) {
             throw new IOException("worker did not provide a regular telemetry file within the size limit");
         }

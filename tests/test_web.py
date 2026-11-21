@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -112,41 +113,53 @@ class WorkspaceTests(unittest.TestCase):
                 listener.bind(("127.0.0.1", 0))
                 port = listener.getsockname()[1]
             token = secrets.token_urlsafe()
-            environment = dict(os.environ, ORBIT_JOB_TOKEN=token)
-            with subprocess.Popen(
-                [_JAVA, "-jar", str(_CONTROLLER), "--serve", sys.executable, str(port), spool],
-                env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            ) as service:
-                try:
-                    jobs = JobClient(port, token)
-                    self.wait_for_service(jobs, service)
-                    self.app = create_app(8765, jobs)
-                    self.assertEqual(json.loads(self.request("/api/capabilities")["body"]), {"mission_jobs": True})
-                    plan = self.request("/api/examples/hohmann")["body"]
-                    self.assertEqual(self.request("/api/run", plan)["status"], "409 Conflict")
-                    key = secrets.token_urlsafe()
-                    first = self.request("/api/jobs", plan, HTTP_IDEMPOTENCY_KEY=key)
-                    self.assertEqual(first["status"], "202 Accepted", first["body"])
-                    identifier = json.loads(first["body"])["id"]
-                    second = self.request("/api/jobs", plan, HTTP_IDEMPOTENCY_KEY=key)
-                    self.assertEqual(json.loads(second["body"])["id"], identifier)
-                    path = f"/api/jobs/{identifier}"
-                    status = self.wait_for_job(path)
-                    self.assertEqual(status["state"], "complete", status)
-                    self.assertEqual(status["rows"], 244)
-                    response = self.request(f"{path}/telemetry")
-                    self.assertEqual(response["status"], "200 OK", response["body"][:240])
-                    self.assertIn(b"7200.0,complete,", response["body"])
-                    self.assertEqual(jobs.forward("GET", f"/jobs/{identifier}", owner="other-owner")[0],
-                                     "404 Not Found")
-                    self.assertEqual(self.request(path, HTTP_X_ORBIT_OWNER="other-owner")["status"], "200 OK")
-                    self.assertEqual(self.request(path, HTTP_ORIGIN="http://elsewhere.invalid")["status"],
-                                     "403 Forbidden")
-                    self.check_browser_cancellation()
-                finally:
-                    if service.poll() is None:
-                        service.terminate()
-                    service.wait(timeout=8)
+            jobs = JobClient(port, token)
+            self.app = create_app(8765, jobs)
+            with self.running_service(jobs, spool):
+                self.assertEqual(json.loads(self.request("/api/capabilities")["body"]), {"mission_jobs": True})
+                plan = self.request("/api/examples/hohmann")["body"]
+                self.assertEqual(self.request("/api/run", plan)["status"], "409 Conflict")
+                key = secrets.token_urlsafe()
+                first = self.request("/api/jobs", plan, HTTP_IDEMPOTENCY_KEY=key)
+                self.assertEqual(first["status"], "202 Accepted", first["body"])
+                identifier = json.loads(first["body"])["id"]
+                second = self.request("/api/jobs", plan, HTTP_IDEMPOTENCY_KEY=key)
+                self.assertEqual(json.loads(second["body"])["id"], identifier)
+                path = f"/api/jobs/{identifier}"
+                status = self.wait_for_job(path)
+                self.assertEqual(status["state"], "complete", status)
+                self.assertEqual(status["rows"], 244)
+                response = self.request(f"{path}/telemetry")
+                self.assertEqual(response["status"], "200 OK", response["body"][:240])
+                csv_bytes = response["body"]
+                self.assertIn(b"7200.0,complete,", csv_bytes)
+                self.assertEqual(jobs.forward("GET", f"/jobs/{identifier}", owner="other-owner")[0],
+                                 "404 Not Found")
+                self.assertEqual(self.request(path, HTTP_X_ORBIT_OWNER="other-owner")["status"], "200 OK")
+                self.assertEqual(self.request(path, HTTP_ORIGIN="http://elsewhere.invalid")["status"],
+                                 "403 Forbidden")
+                self.check_browser_cancellation()
+            with self.running_service(jobs, spool):
+                restored = self.request("/api/jobs", plan, HTTP_IDEMPOTENCY_KEY=key)
+                self.assertEqual(restored["status"], "202 Accepted", restored["body"])
+                self.assertEqual(json.loads(restored["body"])["id"], identifier)
+                self.assertEqual(json.loads(restored["body"])["state"], "complete")
+                self.assertEqual(self.request(f"{path}/telemetry")["body"], csv_bytes)
+
+    @contextmanager
+    def running_service(self, jobs, spool):
+        environment = dict(os.environ, ORBIT_JOB_TOKEN=jobs.token)
+        with subprocess.Popen(
+            [_JAVA, "-jar", str(_CONTROLLER), "--serve", sys.executable, str(jobs.port), spool],
+            env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ) as service:
+            try:
+                self.wait_for_service(jobs, service)
+                yield
+            finally:
+                if service.poll() is None:
+                    service.terminate()
+                service.wait(timeout=18)
 
     def wait_for_service(self, jobs, service):
         for _ in range(80):

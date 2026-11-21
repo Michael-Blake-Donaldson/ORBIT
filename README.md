@@ -44,8 +44,9 @@ of the command line and source control.
 mvn -f controller/pom.xml package
 uv sync --locked --extra web
 $orbitPython = (uv run --locked --extra web python -c "import sys; print(sys.executable)").Trim()
-New-Item -ItemType Directory -Force output | Out-Null
-java -jar controller/target/orbit-controller-0.1.0.jar --serve $orbitPython 8766 output
+$orbitSpool = Join-Path $env:LOCALAPPDATA 'ORBIT/MissionJobSpool'
+New-Item -ItemType Directory -Force $orbitSpool | Out-Null
+java -jar controller/target/orbit-controller-0.1.0.jar --serve $orbitPython 8766 $orbitSpool
 ```
 
 In a second terminal with the same token in its environment, run:
@@ -62,10 +63,18 @@ idempotency key and exact plan reuse the existing job. Reusing that key
 with a different plan returns a conflict.
 
 The Java process runs at most two simulations and queues eight more.
-The in-memory registry holds up to 64 jobs. Terminal records and their
-private temporary artifacts expire after 30 minutes. A restart starts a
-new registry. This configuration is a single-workspace integration
-preview with a service-to-service credential.
+It retains up to 64 job records in `orbit-job-store-v1` under the spool
+directory. Use a service-owned directory on a local filesystem that
+supports exclusive locks and atomic renames. Keep it outside web asset
+directories and file-sync tools. Only one controller can open the store
+at a time.
+
+Completed results and idempotency keys survive a controller restart.
+Interrupted jobs become failed, and a recorded cancellation becomes
+cancelled. Terminal records and artifacts expire after 30 minutes.
+The internal API scopes status, cancellation, telemetry, and
+idempotency to the owner supplied by the authenticated gateway. The
+loopback browser preview supplies a single fixed owner.
 
 ## Run a mission
 

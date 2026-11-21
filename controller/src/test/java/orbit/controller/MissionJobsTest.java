@@ -72,7 +72,7 @@ class MissionJobsTest {
             assertEquals(MissionJobs.State.CANCELLED, terminal(jobs, running.id()).state());
             assertEquals(409, assertThrows(MissionJobs.JobException.class, () -> jobs.result(OWNER, running.id())).status());
             try (var paths = Files.walk(spool)) {
-                assertTrue(paths.noneMatch(Files::isRegularFile));
+                assertTrue(paths.noneMatch(path -> path.endsWith("plan.json") || path.endsWith("telemetry.csv")));
             }
         }
     }
@@ -104,9 +104,58 @@ class MissionJobsTest {
             assertEquals(404, assertThrows(MissionJobs.JobException.class,
                     () -> jobs.result(OWNER, completed.id())).status());
             try (var paths = Files.walk(spool)) {
-                assertTrue(paths.noneMatch(Files::isRegularFile));
+                assertTrue(paths.noneMatch(path -> path.endsWith("job.properties") || path.endsWith("telemetry.csv")));
             }
             assertEquals(MissionJobs.State.COMPLETE, terminal(jobs, jobs.submit(OWNER, FIRST, PLAN).id()).state());
+        }
+    }
+
+    @Test
+    void completedResultAndKeySurviveClosingAndReopeningTheStore() throws Exception {
+        UUID id;
+        try (MissionJobs jobs = service((plan, telemetry) -> {
+            Files.write(telemetry, CSV);
+            return new MissionController.Receipt("complete", 0, 1);
+        })) {
+            id = terminal(jobs, jobs.submit(OWNER, FIRST, PLAN).id()).id();
+            assertEquals(MissionJobs.State.COMPLETE, jobs.status(OWNER, id).state());
+            assertThrows(IOException.class, () -> service((plan, telemetry) -> null));
+        }
+        try (MissionJobs reopened = service((plan, telemetry) -> {
+            throw new AssertionError("retry must not rerun a recovered job");
+        })) {
+            assertEquals(id, reopened.submit(OWNER, FIRST, PLAN).id());
+            assertEquals(MissionJobs.State.COMPLETE, reopened.status(OWNER, id).state());
+            assertArrayEquals(CSV, reopened.result(OWNER, id));
+            assertEquals(404, assertThrows(MissionJobs.JobException.class,
+                    () -> reopened.result("other-owner", id)).status());
+        }
+    }
+
+    @Test
+    void interruptedJobsAndCancellationIntentRecoverWithoutExposingUncommittedTelemetry() throws Exception {
+        UUID running = UUID.randomUUID();
+        UUID cancelling = UUID.randomUUID();
+        byte[] hash = java.security.MessageDigest.getInstance("SHA-256").digest(PLAN);
+        try (var store = new MissionJobStore(spool)) {
+            store.create(running);
+            store.save(new MissionJobStore.Entry(running, OWNER, FIRST, hash, MissionJobs.State.QUEUED, null, null));
+            Files.write(store.telemetry(running), CSV);
+            store.create(cancelling);
+            store.save(new MissionJobStore.Entry(
+                    cancelling, OWNER, SECOND, hash, MissionJobs.State.CANCELLING, null, null));
+            Path interruptedWork = Files.createTempDirectory(store.directory(cancelling), "work-");
+            Files.write(interruptedWork.resolve("telemetry.csv"), CSV);
+        }
+        try (MissionJobs reopened = service((plan, telemetry) -> null)) {
+            assertEquals(MissionJobs.State.FAILED, reopened.status(OWNER, running).state());
+            assertEquals(MissionJobs.State.CANCELLED, reopened.status(OWNER, cancelling).state());
+            assertEquals(running, reopened.submit(OWNER, FIRST, PLAN).id());
+            assertEquals(409, assertThrows(MissionJobs.JobException.class,
+                    () -> reopened.result(OWNER, running)).status());
+            try (var paths = Files.walk(spool)) {
+                assertTrue(paths.noneMatch(path -> path.endsWith("telemetry.csv")));
+            }
         }
     }
 

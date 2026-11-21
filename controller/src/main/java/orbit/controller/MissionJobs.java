@@ -2,6 +2,7 @@ package orbit.controller;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -56,7 +57,8 @@ final class MissionJobs implements AutoCloseable {
         }
     }
 
-    private final Path spool;
+    private static final System.Logger LOG = System.getLogger(MissionJobs.class.getName());
+    private final MissionJobStore store;
     private final Duration retention;
     private final Clock clock;
     private final Worker worker;
@@ -68,18 +70,58 @@ final class MissionJobs implements AutoCloseable {
 
     MissionJobs(Path spool, int parallelism, int queueSize, int maxEntries, Duration retention, Clock clock,
                 Worker worker) throws IOException {
-        this.spool = Files.createTempDirectory(spool.toRealPath(), "orbit-jobs-");
         this.retention = retention;
         this.clock = clock;
         this.worker = worker;
         this.maxEntries = maxEntries;
         workers = new ThreadPoolExecutor(parallelism, parallelism, 0, TimeUnit.SECONDS,
                 new ArrayBlockingQueue<>(queueSize));
+        store = new MissionJobStore(spool);
+        try {
+            restore();
+        } catch (IOException | RuntimeException e) {
+            try {
+                store.close();
+            } catch (IOException cleanup) {
+                e.addSuppressed(cleanup);
+            }
+            throw e;
+        }
+    }
+
+    private void restore() throws IOException {
+        for (var record : store.load(maxEntries)) {
+            OwnerKey key = new OwnerKey(record.owner(), record.key());
+            Job job = new Job(record.id(), key, record.digest(), null);
+            job.state = record.state();
+            job.expires = record.expires();
+            job.failure = record.failure();
+            if (job.state == State.COMPLETE) {
+                try {
+                    job.receipt = MissionController.readReceipt(
+                            store.telemetry(job.id), MAX_RESULT_ROWS, MAX_RESULT_BYTES);
+                } catch (IOException ignored) {
+                    job.finish(State.FAILED, null, "Stored telemetry could not be recovered.");
+                    Files.deleteIfExists(store.telemetry(job.id));
+                }
+            } else if (!job.state.terminal()) {
+                if (job.state == State.CANCELLING) {
+                    job.finish(State.CANCELLED, null, null);
+                } else {
+                    job.finish(State.FAILED, null, "The job was interrupted by a service restart.");
+                }
+            }
+            if (keys.put(key, job) != null) {
+                throw new IOException("Job checkpoints contain duplicate submission keys.");
+            }
+            jobs.put(job.id, job);
+        }
+        expire();
     }
 
     synchronized Snapshot submit(String owner, String key, byte[] plan) throws JobException, IOException {
         requireOwner(owner);
-        if (key == null || !KEY.matcher(key).matches()) {
+        if (!validKey(key)) {
             throw new JobException(400, "Provide a valid idempotency key.");
         }
         if (plan.length == 0 || plan.length > MAX_PLAN_BYTES) {
@@ -102,11 +144,21 @@ final class MissionJobs implements AutoCloseable {
             throw new JobException(503, "The job store is at capacity. Try again later.");
         }
 
-        Job job = new Job(ownerKey, hash, plan.clone());
+        Job job = new Job(UUID.randomUUID(), ownerKey, hash, plan.clone());
+        store.create(job.id);
         try {
+            job.checkpoint(State.QUEUED, null, null);
             workers.execute(job);
         } catch (RejectedExecutionException ignored) {
+            store.delete(job.id);
             throw new JobException(503, "The mission queue is full. Try again shortly.");
+        } catch (IOException e) {
+            try {
+                store.delete(job.id);
+            } catch (IOException cleanup) {
+                e.addSuppressed(cleanup);
+            }
+            throw e;
         }
         jobs.put(job.id, job);
         keys.put(ownerKey, job);
@@ -125,12 +177,13 @@ final class MissionJobs implements AutoCloseable {
         return job.snapshot();
     }
 
-    private void cancel(Job job) {
+    private void cancel(Job job) throws IOException {
         if (job.state == State.QUEUED) {
+            job.finish(State.CANCELLED, null, null);
             workers.remove(job);
             job.body = null;
-            job.finish(State.CANCELLED);
         } else if (job.state == State.RUNNING) {
+            job.checkpoint(State.CANCELLING, null, null);
             job.state = State.CANCELLING;
             job.thread.interrupt();
         }
@@ -142,7 +195,7 @@ final class MissionJobs implements AutoCloseable {
         if (job.state != State.COMPLETE) {
             throw new JobException(409, "Telemetry is available only for successfully completed jobs.");
         }
-        try (var input = Files.newInputStream(job.directory.resolve("telemetry.csv"))) {
+        try (var input = Files.newInputStream(store.telemetry(job.id), LinkOption.NOFOLLOW_LINKS)) {
             byte[] result = input.readNBytes(MAX_RESULT_BYTES + 1);
             if (result.length > MAX_RESULT_BYTES) {
                 throw new IOException("Job telemetry exceeds the result budget.");
@@ -157,9 +210,7 @@ final class MissionJobs implements AutoCloseable {
         while (entries.hasNext()) {
             Job job = entries.next();
             if (job.expires != null && !job.expires.isAfter(now)) {
-                if (job.directory != null) {
-                    MissionController.removeStaging(job.directory);
-                }
+                store.delete(job.id);
                 keys.remove(job.key);
                 entries.remove();
             }
@@ -176,9 +227,17 @@ final class MissionJobs implements AutoCloseable {
     }
 
     private static void requireOwner(String owner) throws JobException {
-        if (owner == null || !OWNER.matcher(owner).matches()) {
+        if (!validOwner(owner)) {
             throw new JobException(400, "A valid job owner is required.");
         }
+    }
+
+    static boolean validOwner(String owner) {
+        return owner != null && OWNER.matcher(owner).matches();
+    }
+
+    static boolean validKey(String key) {
+        return key != null && KEY.matcher(key).matches();
     }
 
     private static byte[] digest(byte[] body) {
@@ -193,28 +252,45 @@ final class MissionJobs implements AutoCloseable {
     public void close() throws IOException, InterruptedException {
         synchronized (this) {
             closed = true;
-            jobs.values().forEach(this::cancel);
+            for (Job job : jobs.values()) {
+                try {
+                    cancel(job);
+                } catch (IOException ignored) {
+                    LOG.log(System.Logger.Level.WARNING, "Could not checkpoint a job during shutdown.");
+                    if (job.state == State.RUNNING) {
+                        job.state = State.CANCELLING;
+                        job.thread.interrupt();
+                    } else if (job.state == State.QUEUED) {
+                        workers.remove(job);
+                        job.state = State.CANCELLED;
+                        job.body = null;
+                    }
+                }
+            }
             workers.shutdown();
         }
-        if (!workers.awaitTermination(10, TimeUnit.SECONDS)) {
-            throw new IOException("Workers did not stop before shutdown.");
+        try {
+            if (!workers.awaitTermination(10, TimeUnit.SECONDS)) {
+                throw new IOException("Workers did not stop before shutdown.");
+            }
+        } finally {
+            store.close();
         }
-        MissionController.removeStaging(spool);
     }
 
     private final class Job implements Runnable {
-        private final UUID id = UUID.randomUUID();
+        private final UUID id;
         private final OwnerKey key;
         private final byte[] hash;
         private byte[] body;
         private State state = State.QUEUED;
-        private Path directory;
         private Thread thread;
         private Instant expires;
         private MissionController.Receipt receipt;
         private String failure;
 
-        Job(OwnerKey key, byte[] hash, byte[] body) {
+        Job(UUID id, OwnerKey key, byte[] hash, byte[] body) {
+            this.id = id;
             this.key = key;
             this.hash = hash;
             this.body = body;
@@ -224,10 +300,18 @@ final class MissionJobs implements AutoCloseable {
             return new Snapshot(id, state, receipt, failure);
         }
 
-        void finish(State terminal) {
+        void checkpoint(State next, Instant expiration, String message) throws IOException {
+            store.save(new MissionJobStore.Entry(id, key.owner(), key.key(), hash, next, expiration, message));
+        }
+
+        void finish(State terminal, MissionController.Receipt result, String message) throws IOException {
+            Instant expiration = clock.instant().plus(retention);
+            checkpoint(terminal, expiration, message);
             state = terminal;
             thread = null;
-            expires = clock.instant().plus(retention);
+            expires = expiration;
+            receipt = result;
+            failure = message;
         }
 
         @Override
@@ -246,43 +330,48 @@ final class MissionJobs implements AutoCloseable {
             MissionController.Receipt result = null;
             String failureMessage = null;
             try {
-                staging = Files.createTempDirectory(spool, "run-");
+                staging = Files.createTempDirectory(store.directory(id), "work-");
                 Path plan = Files.write(staging.resolve("plan.json"), planBytes);
                 result = worker.run(plan, staging.resolve("telemetry.csv"));
-                Files.delete(plan);
             } catch (MissionController.WorkerFailure e) {
                 failureMessage = e.status() == 124 ? "The simulation exceeded its deadline."
                         : "The simulation rejected the mission plan.";
             } catch (IOException | RuntimeException e) {
                 failureMessage = "The simulation could not produce valid telemetry.";
             } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
                 failureMessage = "The simulation was interrupted.";
             }
             synchronized (MissionJobs.this) {
-                if (state == State.RUNNING && failureMessage == null && result != null) {
-                    directory = staging;
-                    receipt = result;
-                    finish(State.COMPLETE);
-                    return;
-                }
-            }
-            Path cleanupDirectory = null;
-            if (staging != null) {
+                // Cancellation may leave an interrupt flag set, which would abort checkpoint I/O.
+                boolean interrupted = Thread.interrupted();
                 try {
-                    MissionController.removeStaging(staging);
-                } catch (IOException e) {
-                    // Retain the private directory for the expiry sweep to retry cleanup.
-                    cleanupDirectory = staging;
-                }
-            }
-            synchronized (MissionJobs.this) {
-                directory = cleanupDirectory;
-                if (state == State.CANCELLING) {
-                    finish(State.CANCELLED);
-                } else {
-                    failure = failureMessage == null ? "The simulation could not produce valid telemetry." : failureMessage;
-                    finish(State.FAILED);
+                    State terminal;
+                    String message = null;
+                    if (state == State.CANCELLING) {
+                        terminal = State.CANCELLED;
+                    } else if (failureMessage == null && result != null && staging != null) {
+                        store.publish(id, staging.resolve("telemetry.csv"));
+                        terminal = State.COMPLETE;
+                    } else {
+                        terminal = State.FAILED;
+                        message = failureMessage == null ? "The simulation could not produce valid telemetry."
+                                : failureMessage;
+                    }
+                    if (staging != null) {
+                        MissionController.removeStaging(staging);
+                    }
+                    finish(terminal, terminal == State.COMPLETE ? result : null, message);
+                } catch (IOException ignored) {
+                    // An uncommitted result must never become visible, even when storage fails.
+                    LOG.log(System.Logger.Level.WARNING, "Could not finalize a mission checkpoint.");
+                    state = State.FAILED;
+                    thread = null;
+                    expires = clock.instant().plus(retention);
+                    failure = "The job store could not finalize the simulation.";
+                } finally {
+                    if (interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
                 }
             }
         }
