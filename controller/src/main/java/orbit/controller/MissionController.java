@@ -18,8 +18,8 @@ public final class MissionController {
             "Usage: java -jar orbit-controller-0.1.0.jar <python> <mission.json> <output.csv> [timeout-seconds]";
     private static final int DEFAULT_TIMEOUT_SECONDS = 120;
     private static final int MAX_TIMEOUT_SECONDS = 3600;
-    private static final int MAX_ROWS = 100_000;
-    private static final int MAX_CSV_BYTES = 64 * 1024 * 1024;
+    static final int MAX_ROWS = 100_000;
+    static final int MAX_CSV_BYTES = 64 * 1024 * 1024;
     private static final Pattern TERMINAL_CONTROLS = Pattern.compile("[\\p{Cc}\\p{Cf}]");
 
     private MissionController() {}
@@ -59,6 +59,9 @@ public final class MissionController {
         } catch (IllegalArgumentException e) {
             diagnostic(e.getMessage());
             return 2;
+        } catch (WorkerFailure e) {
+            diagnostic(e.getMessage());
+            return e.status();
         } catch (IOException | UnsupportedOperationException e) {
             diagnostic(e.getMessage());
             return 1;
@@ -77,30 +80,8 @@ public final class MissionController {
         Path staging = Files.createTempDirectory(output.getParent(), ".orbit-controller-");
         try {
             Path telemetry = staging.resolve("telemetry.csv");
-            Process worker = new ProcessBuilder(
-                    python.toString(), "-I", "-X", "utf8", "-m", "orbit_sim", "--",
-                    plan.toString(), telemetry.toString())
-                    .directory(staging.toFile())
-                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                    .redirectError(ProcessBuilder.Redirect.INHERIT)
-                    .start();
-            try {
-                worker.getOutputStream().close();
-                if (!worker.waitFor(timeout, TimeUnit.SECONDS)) {
-                    diagnostic("simulation exceeded the " + timeout + " second timeout");
-                    return 124;
-                }
-                if (worker.exitValue() != 0) {
-                    diagnostic("simulation worker exited with code " + worker.exitValue());
-                    return 1;
-                }
-            } finally {
-                if (worker.isAlive()) {
-                    terminate(worker);
-                }
-            }
-
-            Receipt receipt = readReceipt(telemetry);
+            Receipt receipt = simulate(python, plan, telemetry, timeout, MAX_ROWS, MAX_CSV_BYTES,
+                    ProcessBuilder.Redirect.INHERIT);
             // Link creation publishes the completed file without replacing a concurrent result.
             Files.createLink(output, telemetry);
             System.out.printf(Locale.ROOT, "ORBIT %s at %.6f s (%d telemetry rows)%n",
@@ -115,6 +96,31 @@ public final class MissionController {
         }
     }
 
+    static Receipt simulate(Path python, Path plan, Path telemetry, int timeout, int maxRows, int maxBytes,
+                            ProcessBuilder.Redirect diagnostics) throws IOException, InterruptedException {
+        Process worker = new ProcessBuilder(
+                python.toString(), "-I", "-X", "utf8", "-m", "orbit_sim", "--",
+                plan.toString(), telemetry.toString())
+                .directory(telemetry.getParent().toFile())
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(diagnostics)
+                .start();
+        try {
+            worker.getOutputStream().close();
+            if (!worker.waitFor(timeout, TimeUnit.SECONDS)) {
+                throw new WorkerFailure(124, "simulation exceeded the " + timeout + " second timeout");
+            }
+            if (worker.exitValue() != 0) {
+                throw new WorkerFailure(1, "simulation worker exited with code " + worker.exitValue());
+            }
+        } finally {
+            if (worker.isAlive()) {
+                terminate(worker);
+            }
+        }
+        return readReceipt(telemetry, maxRows, maxBytes);
+    }
+
     private static void terminate(Process worker) throws InterruptedException {
         // The Windows virtual-environment launcher can start a second Python process.
         var children = worker.descendants().toList();
@@ -123,8 +129,8 @@ public final class MissionController {
         worker.waitFor(5, TimeUnit.SECONDS);
     }
 
-    private static Receipt readReceipt(Path telemetry) throws IOException {
-        if (!Files.isRegularFile(telemetry, LinkOption.NOFOLLOW_LINKS) || Files.size(telemetry) > MAX_CSV_BYTES) {
+    private static Receipt readReceipt(Path telemetry, int maxRows, int maxBytes) throws IOException {
+        if (!Files.isRegularFile(telemetry, LinkOption.NOFOLLOW_LINKS) || Files.size(telemetry) > maxBytes) {
             throw new IOException("worker did not provide a regular telemetry file within the size limit");
         }
         try (BufferedReader file = Files.newBufferedReader(telemetry)) {
@@ -135,7 +141,7 @@ public final class MissionController {
             int rows = 0;
             String last = "";
             for (String line = file.readLine(); line != null; line = file.readLine()) {
-                if (++rows > MAX_ROWS) {
+                if (++rows > maxRows) {
                     throw new IOException("telemetry exceeds the row limit");
                 }
                 last = line;
@@ -156,7 +162,7 @@ public final class MissionController {
         }
     }
 
-    private static void removeStaging(Path staging) throws IOException {
+    static void removeStaging(Path staging) throws IOException {
         try (Stream<Path> descendants = Files.walk(staging)) {
             Iterator<Path> paths = descendants.sorted((left, right) ->
                     Integer.compare(right.getNameCount(), left.getNameCount())).iterator();
@@ -171,5 +177,18 @@ public final class MissionController {
         System.err.println("ORBIT controller: " + safe);
     }
 
-    private record Receipt(String outcome, double elapsedSeconds, int rows) {}
+    record Receipt(String outcome, double elapsedSeconds, int rows) {}
+
+    static final class WorkerFailure extends IOException {
+        private final int status;
+
+        WorkerFailure(int status, String message) {
+            super(message);
+            this.status = status;
+        }
+
+        int status() {
+            return status;
+        }
+    }
 }
