@@ -1,0 +1,9 @@
+services:
+  edge:
+    ports:
+      - "127.0.0.1:8765:8080"
+    volumes:
+      - ./nginx.preview.conf:/etc/nginx/orbit.conf:ro
+  workspace:
+    environment:
+      ORBIT_REQUIRE_ALB: "0"

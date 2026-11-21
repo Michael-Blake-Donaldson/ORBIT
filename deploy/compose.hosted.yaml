@@ -1,0 +1,24 @@
+services:
+  edge:
+    restart: unless-stopped
+    ports:
+      - "${ORBIT_TARGET_BIND_IP:?Set the host private IPv4 address}:8443:8443"
+    volumes:
+      - ./nginx.hosted.conf:/etc/nginx/orbit.conf:ro
+    secrets: [orbit_tls_certificate, orbit_tls_key]
+  controller:
+    restart: unless-stopped
+  workspace:
+    restart: unless-stopped
+    environment:
+      ORBIT_REQUIRE_ALB: "1"
+      ORBIT_PUBLIC_ORIGIN: "${ORBIT_PUBLIC_ORIGIN:?Set the public HTTPS origin}"
+      ORBIT_ALB_ARN: "${ORBIT_ALB_ARN:?Set the signing load balancer ARN}"
+      ORBIT_OIDC_ISSUER: "${ORBIT_OIDC_ISSUER:?Set the exact identity issuer}"
+      ORBIT_OIDC_CLIENT_ID: "${ORBIT_OIDC_CLIENT_ID:?Set the identity client ID}"
+
+secrets:
+  orbit_tls_certificate:
+    file: "${ORBIT_TLS_CERT_PATH:?Set the target TLS certificate path}"
+  orbit_tls_key:
+    file: "${ORBIT_TLS_KEY_PATH:?Set the private target TLS key path}"

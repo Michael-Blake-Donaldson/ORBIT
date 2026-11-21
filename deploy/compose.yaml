@@ -1,0 +1,65 @@
+name: orbit
+
+x-sandbox: &sandbox
+  read_only: true
+  init: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+
+services:
+  edge:
+    <<: *sandbox
+    image: nginx/nginx-unprivileged:stable-alpine@sha256:0c53a1f2890c3526bfd201440f0fd3970e5b78f80630f58284aad0d34b5ec7bd
+    entrypoint: ["nginx", "-c", "/etc/nginx/orbit.conf", "-g", "daemon off;"]
+    volumes:
+      - ./nginx.common.conf:/etc/nginx/orbit-common.conf:ro
+    mem_limit: 96m
+    pids_limit: 48
+
+  controller:
+    <<: *sandbox
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: "${ORBIT_APP_IMAGE:-orbit-workspace:local}"
+    command: ["controller"]
+    network_mode: "service:edge"
+    mem_limit: 768m
+    cpus: 2
+    pids_limit: 160
+    stop_grace_period: 20s
+    secrets: [orbit_job_token]
+    volumes:
+      - orbit_jobs:/var/lib/orbit
+    healthcheck:
+      test: ["CMD", "/opt/venv/bin/python", "/opt/orbit/container_entrypoint.py", "check-controller"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+
+  workspace:
+    <<: *sandbox
+    image: "${ORBIT_APP_IMAGE:-orbit-workspace:local}"
+    command: ["workspace"]
+    pull_policy: never
+    network_mode: "service:edge"
+    depends_on:
+      controller:
+        condition: service_healthy
+    mem_limit: 256m
+    pids_limit: 64
+    secrets: [orbit_job_token]
+    healthcheck:
+      test: ["CMD", "/opt/venv/bin/python", "/opt/orbit/container_entrypoint.py", "check-workspace"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+
+volumes:
+  orbit_jobs:
+
+secrets:
+  orbit_job_token:
+    file: "${ORBIT_JOB_TOKEN_PATH:?Set ORBIT_JOB_TOKEN_PATH to a private file outside this checkout}"
