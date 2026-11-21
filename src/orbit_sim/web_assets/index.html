@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Plan, simulate, and inspect Earth orbit missions in ORBIT.">
+  <title>ORBIT · Mission workspace</title>
+  <link rel="stylesheet" href="/workspace.css">
+  <script type="module" src="/workspace.mjs"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="orbit-mark" aria-hidden="true"></span><strong>ORBIT</strong><span class="divider"></span><span>Mission workspace</span></div>
+    <div class="top-tools"><label for="example" class="sr-only">Example mission</label><select id="example">
+      <option value="hohmann">Hohmann transfer</option><option value="finite-burn">Finite prograde burn</option><option value="j2-precession">J₂ nodal regression</option>
+    </select><label class="button secondary file-picker">Import plan<input id="upload" type="file" accept=".json,application/json"></label></div>
+  </header>
+  <main class="workspace">
+    <section class="editor panel" aria-labelledby="plan-title">
+      <header class="section-title"><h1 id="plan-title">Mission plan</h1><button class="text-button" id="save-plan" type="button">Save JSON</button></header>
+      <p class="plan-context" id="plan-name"></p>
+      <form id="plan-form" novalidate>
+        <fieldset id="editor-fields" disabled>
+          <section class="form-section" aria-labelledby="initial-title">
+            <div class="subhead"><h2 id="initial-title">Initial orbit</h2><label class="sr-only" for="representation">Initial orbit representation</label><select id="representation" title="Each representation keeps its own draft"><option value="initial_state">Cartesian ECI</option><option value="initial_orbit">Keplerian</option></select></div>
+            <p class="helper" id="orbit-context"></p>
+            <div id="orbit-fields" class="form-grid"></div>
+          </section>
+          <section class="form-section" aria-labelledby="timing-title">
+            <h2 id="timing-title">Simulation</h2>
+            <div class="form-grid">
+              <label>Duration <span>s</span><input name="duration_s" type="number" step="any" required min="0.001" max="2592000"></label>
+              <label>Sample interval <span>s</span><input name="sample_interval_s" type="number" step="any" required min="0.001" max="2592000"></label>
+              <label class="wide">Gravity model<select name="gravity"><option value="point_mass">Earth point mass</option><option value="j2">Earth + J₂</option></select></label>
+            </div>
+          </section>
+          <details id="spacecraft" class="form-section"><summary><span>Spacecraft</span><span id="spacecraft-status" class="helper"></span></summary>
+            <label class="checkbox"><input type="checkbox" id="track-propellant"> Model propellant use</label>
+            <div id="spacecraft-fields" class="form-grid"></div>
+          </details>
+          <section class="form-section" aria-labelledby="burn-title">
+            <h2 id="burn-title">Maneuvers</h2>
+            <div id="maneuvers"></div>
+            <div class="button-row"><button class="button secondary" id="add-impulse" type="button">Add impulse</button><button class="button secondary" id="add-finite" type="button">Add finite burn</button></div>
+          </section>
+        </fieldset>
+        <footer class="plan-footer">
+          <p id="errors" role="alert" hidden></p>
+          <p id="status" role="status" aria-live="polite"></p>
+          <div class="button-row"><button class="button primary" id="run" type="submit" disabled>Run simulation</button><button class="button secondary" id="validate" type="button" disabled>Validate</button></div>
+        </footer>
+      </form>
+    </section>
+    <section class="results" aria-labelledby="results-title">
+      <header class="results-heading"><div><h2 id="results-title">Flight results</h2><p id="result-caption">Run a mission to populate the trajectory and telemetry.</p></div><button class="button secondary" id="download" type="button" disabled>Export telemetry</button></header>
+      <div class="metrics" aria-label="Mission summary">
+        <div class="metric"><span>Final altitude</span><strong id="final-altitude">—</strong></div>
+        <div class="metric"><span>Final speed</span><strong id="final-speed">—</strong></div>
+        <div class="metric"><span>Final mass</span><strong id="final-mass">—</strong></div>
+        <div class="metric"><span>Telemetry rows</span><strong id="row-count">—</strong></div>
+      </div>
+      <section class="panel plot-panel" aria-labelledby="trajectory-title">
+        <div class="section-title"><div><h3 id="trajectory-title">Trajectory</h3><p class="helper">Earth-centered inertial projection · km</p></div><label class="sr-only" for="plane">Projection plane</label><select id="plane"><option>XY</option><option>XZ</option><option>YZ</option></select></div>
+        <canvas id="trajectory" aria-label="Orbit and selected spacecraft position in the chosen plane"></canvas>
+        <div class="legend"><span class="key orbit-key"></span>Trajectory<span class="key burn-key"></span>Maneuver<span class="key selected-key"></span>Selected sample</div>
+      </section>
+      <section class="panel plot-panel" aria-labelledby="telemetry-title">
+        <div class="section-title"><div><h3 id="telemetry-title">Telemetry</h3><p class="helper">Scrub to inspect a sample.</p></div><label class="sr-only" for="series">Telemetry metric</label><select id="series"><option value="altitude">Altitude</option><option value="speed">Speed</option><option value="mass">Mass</option><option value="axis">Semi-major axis</option></select></div>
+        <canvas id="telemetry" aria-label="Telemetry over elapsed time"></canvas>
+        <div class="timeline">
+          <button id="previous" class="button secondary step-button" type="button" title="Previous sample" aria-label="Previous sample" disabled>−</button>
+          <label for="sample-index" class="sr-only">Inspect telemetry sample</label><input id="sample-index" type="range" min="0" max="1" value="0" disabled>
+          <button id="next" class="button secondary step-button" type="button" title="Next sample" aria-label="Next sample" disabled>+</button>
+          <label for="events" class="sr-only">Mission event</label><select id="events" disabled><option value="">Jump to event</option></select>
+        </div>
+        <div class="selected"><p id="selected">No sample selected.</p><p id="selected-position"></p><p id="selected-velocity"></p></div>
+      </section>
+    </section>
+  </main>
+</body>
+</html>
