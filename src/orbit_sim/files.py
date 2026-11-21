@@ -33,9 +33,13 @@ def _reject_constant(constant: str) -> None:
 
 
 def read_json_object(path: Path, limit: int, description: str) -> dict[str, object]:
+    return parse_json_object(read_text(path, limit, description), description)
+
+
+def parse_json_object(source: str, description: str) -> dict[str, object]:
     try:
         values = json.loads(
-            read_text(path, limit, description),
+            source,
             object_pairs_hook=_unique_json_object,
             parse_constant=_reject_constant,
         )

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "initial_state": {
+    "position_km": [7000, 0, 0],
+    "velocity_km_s": [0, 7.546053290107541, 0]
+  },
+  "duration_s": 7200,
+  "sample_interval_s": 30,
+  "gravity": "point_mass",
+  "spacecraft": {
+    "initial_mass_kg": 1000,
+    "dry_mass_kg": 450,
+    "isp_s": 320
+  },
+  "impulses": [
+    {"time_s": 0, "delta_v_km_s": [0, 0.9349784438373581, 0], "frame": "RTN"},
+    {"time_s": 4607.5111276723765, "delta_v_km_s": [0, 0.816124888546871, 0], "frame": "RTN"}
+  ]
+}

@@ -11,6 +11,13 @@ dependencies = ["numpy>=2.0,<3", "scipy>=1.15,<2"]
 
 [project.scripts]
 orbit-sim = "orbit_sim.cli:main"
+orbit-web = "orbit_sim.web:main"
+
+[project.optional-dependencies]
+web = ["waitress>=3.0.2,<4"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+orbit_sim = ["web_assets/*", "web_assets/missions/*.json"]
