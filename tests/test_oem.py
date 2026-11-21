@@ -76,6 +76,21 @@ class OemTests(unittest.TestCase):
         expected = list(propagate(mission))[-1].state
         self.assertEqual(tuple(map(float, rows[-1][1:])), (*expected.position_km, *expected.velocity_km_s))
 
+    def test_shared_cutoff_impulse_and_ignition_split_ephemeris(self):
+        mission = Mission(
+            _STATE, 30, 10, epoch_jd_tdb=2451545.0,
+            finite_burns=(FiniteBurn(5, 15, (0, 10, 0)), FiniteBurn(15, 25, (0, 5, 0))),
+            impulses=(Impulse(15, _MANEUVER),), spacecraft=Spacecraft(100, 80, 300),
+        )
+        file = io.StringIO()
+        _export_oem(file, mission, _METADATA)
+        (before, left), (after, right) = _segments(file.getvalue())
+        self.assertEqual(before["STOP_TIME"], "2000-01-01T12:00:14.999999999")
+        self.assertEqual(after["START_TIME"], "2000-01-01T12:00:15.000000000")
+        difference = np.asarray(right[0][1:], dtype=float) - np.asarray(left[-1][1:], dtype=float)
+        np.testing.assert_allclose(difference[:3], 0, atol=1e-8)
+        np.testing.assert_allclose(difference[3:], _MANEUVER, atol=1e-10, rtol=0)
+
     def test_terminal_impact_shortens_ephemeris_coverage(self):
         mission = Mission(State((6400, 0, 0), (-1, 0, 0)), 100, 5, epoch_jd_tdb=2460676.5)
         file = io.StringIO()

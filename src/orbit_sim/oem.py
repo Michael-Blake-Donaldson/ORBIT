@@ -101,9 +101,13 @@ def _export_oem(file: TextIO, mission: Mission, metadata: _Metadata) -> tuple[in
         first_ns = None
 
     # Regular samples plus maneuver and terminal boundaries make up the ephemeris.
-    observer = observe_step if mission.impulses else None
+    impulse_times = {impulse.time_s for impulse in mission.impulses}
+    observer = observe_step if impulse_times else None
     for sample in _bounded_propagate(replace(mission, track_apsides=False), observer):
         elapsed = sample.time_s
+        if sample.kind == "burn_end" and elapsed in impulse_times:
+            # The pre-burn sample below represents this cutoff on the earlier segment.
+            continue
         if sample.kind == "pre_burn":
             # Retain a left-hand state evaluated just before the impulse. Distinct time tags
             # keep the consecutive blocks disjoint under CCSDS 502.0-B-3 section 5.2.4.4.

@@ -29,14 +29,19 @@ def _strip_trailing_comma(values: list[str]) -> list[str]:
     return values[:-1] if values and not values[-1].strip() else values
 
 
-def _validate_header(header: str) -> None:
+def _validate_header(header: list[str]) -> None:
     fields = {}
     has_columns = False
-    for line in header.splitlines():
+    for line in header:
         name, separator, value = line.partition(":")
-        if separator:
-            fields[name.strip()] = value.strip()
+        name = name.strip()
+        if separator and (name in _METADATA or name == "Center body name"):
+            if name in fields:
+                raise ValueError(f"Horizons repeats the {name} field")
+            fields[name] = value.strip()
         if _strip_trailing_comma([field.strip() for field in line.split(",")]) == _COLUMNS:
+            if has_columns:
+                raise ValueError("Horizons repeats the vector column header")
             has_columns = True
     center = fields.get("Center body name", "").split()
     if center[:2] != ["Earth", "(399)"]:
@@ -60,15 +65,17 @@ def _julian_date(value: str) -> Decimal:
 
 def _read_vectors(path: Path) -> tuple[Decimal, tuple[EphemerisPoint, ...]]:
     raw = read_text(path, _MAX_TABLE_BYTES, "Horizons export")
-    header, start, tail = raw.partition("$$SOE")
-    table, end, remaining = tail.partition("$$EOE")
-    if not start or not end or "$$SOE" in table or "$$SOE" in remaining:
+    lines = raw.splitlines()
+    markers = [(index, line.strip()) for index, line in enumerate(lines) if line.strip() in {"$$SOE", "$$EOE"}]
+    if [marker for _, marker in markers] != ["$$SOE", "$$EOE"]:
         raise ValueError("Horizons export must contain one complete vector table")
-    _validate_header(header)
+    (start, _), (end, _) = markers
+    _validate_header(lines[:start])
 
     epoch = None
     points = []
-    for row in csv.reader(table.strip().splitlines(), skipinitialspace=True, strict=True):
+    table = "\n".join(lines[start + 1:end]).strip()
+    for row in csv.reader(table.splitlines(), skipinitialspace=True, strict=True):
         if len(points) == MAX_EPHEMERIS_POINTS:
             raise ValueError(f"Horizons ephemeris exceeds the {MAX_EPHEMERIS_POINTS}-point limit")
         row = _strip_trailing_comma(row)
@@ -78,7 +85,9 @@ def _read_vectors(path: Path) -> tuple[Decimal, tuple[EphemerisPoint, ...]]:
         if epoch is None:
             epoch = date
         # Horizons prints Julian dates at limited precision. Preserve the millisecond grid.
-        time_s = round(float((date - epoch) * _SECONDS_PER_DAY), 3)
+        time_s = float(round((date - epoch) * _SECONDS_PER_DAY, 3))
+        if points and time_s <= points[-1].time_s:
+            raise ValueError("Horizons vector times must increase at millisecond resolution")
         point = EphemerisPoint(time_s, tuple(map(float, row[2:5])), tuple(map(float, row[5:8])))
         points.append(point)
     if epoch is None:

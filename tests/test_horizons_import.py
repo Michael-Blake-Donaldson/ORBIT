@@ -94,6 +94,21 @@ class HorizonsImportTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     _read_vectors(self.export)
 
+    def test_rejects_ambiguous_table_boundaries_and_metadata(self):
+        ambiguous = (
+            "Reference frame: Ecliptic of J2000.0\n" + EXPORT,
+            HEADER + EXPORT,
+            EXPORT.replace("$$SOE", "heading $$SOE"),
+            EXPORT + "$$EOE\n",
+            EXPORT.replace(END, START),
+            EXPORT.replace("2460676.666666667", "2460676.499999990"),
+        )
+        for index, export in enumerate(ambiguous):
+            with self.subTest(case=index):
+                self.export.write_text(export, encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    _read_vectors(self.export)
+
     def test_does_not_publish_when_coverage_is_too_short(self):
         self.plan.write_text(json.dumps(BASE | {"duration_s": 14_401}), encoding="utf-8")
         result = self.run_import()
