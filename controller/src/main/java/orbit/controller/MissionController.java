@@ -15,7 +15,8 @@ import java.util.stream.Stream;
 /** Runs an isolated ORBIT worker and publishes telemetry only after a successful exit. */
 public final class MissionController {
     private static final String USAGE =
-            "Usage: java -jar orbit-controller-0.1.0.jar <python> <mission.json> <output.csv> [timeout-seconds]";
+            "Usage: java -jar orbit-controller-0.1.0.jar <python> <mission.json> <output.csv> [timeout-seconds]\n"
+                    + "       java -jar orbit-controller-0.1.0.jar --serve <python> <port> <spool-directory>";
     private static final int DEFAULT_TIMEOUT_SECONDS = 120;
     private static final int MAX_TIMEOUT_SECONDS = 3600;
     static final int MAX_ROWS = 100_000;

@@ -61,6 +61,7 @@ input[type="checkbox"], input[type="range"] { accent-color: var(--mint); }
 #maneuvers + .button-row { margin-top: .65rem; flex-wrap: wrap; }
 .plan-footer { padding: .85rem 1rem 1rem; border-top: 1px solid var(--border); }
 .plan-footer .primary { flex: 1; }
+.plan-footer .button-row { flex-wrap: wrap; }
 #status, #errors { margin-bottom: .55rem; font-size: .875rem; }
 #status:empty { display: none; }
 #status { color: var(--muted); }

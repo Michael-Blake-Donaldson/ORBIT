@@ -11,10 +11,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -83,6 +87,45 @@ class MissionJobsTest {
             assertEquals("The simulation could not produce valid telemetry.", failed.failure());
             assertEquals(409, assertThrows(MissionJobs.JobException.class, () -> jobs.result(failed.id())).status());
         }
+    }
+
+    @Test
+    void terminalJobsExpireWithTheirArtifactsAndReleaseTheIdempotencyKey() throws Exception {
+        AtomicReference<Instant> time = new AtomicReference<>(Instant.EPOCH);
+        try (var jobs = new MissionJobs(spool, 1, 1, 1, Duration.ofMinutes(1), clock(time, ZoneOffset.UTC), (plan, telemetry) -> {
+            Files.write(telemetry, CSV);
+            return new MissionController.Receipt("complete", 0, 1);
+        })) {
+            var completed = terminal(jobs, jobs.submit(FIRST, PLAN).id());
+            assertArrayEquals(CSV, jobs.result(completed.id()));
+            time.set(Instant.EPOCH.plus(Duration.ofMinutes(1)));
+            jobs.expire();
+            assertEquals(404, assertThrows(MissionJobs.JobException.class,
+                    () -> jobs.result(completed.id())).status());
+            try (var paths = Files.walk(spool)) {
+                assertTrue(paths.noneMatch(Files::isRegularFile));
+            }
+            assertEquals(MissionJobs.State.COMPLETE, terminal(jobs, jobs.submit(FIRST, PLAN).id()).state());
+        }
+    }
+
+    private static Clock clock(AtomicReference<Instant> time, ZoneId zone) {
+        return new Clock() {
+            @Override
+            public ZoneId getZone() {
+                return zone;
+            }
+
+            @Override
+            public Clock withZone(ZoneId updated) {
+                return clock(time, updated);
+            }
+
+            @Override
+            public Instant instant() {
+                return time.get();
+            }
+        };
     }
 
     private MissionJobs service(MissionJobs.Worker worker) throws IOException {

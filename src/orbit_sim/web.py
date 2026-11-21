@@ -3,10 +3,12 @@
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
 from collections.abc import Callable, Iterable
+from http.client import HTTPConnection, HTTPException
 from importlib.resources import files
 from math import ceil
 from pathlib import Path
@@ -20,6 +22,10 @@ from .plan import _MAX_PLAN_BYTES, _parse_mission
 MAX_WEB_SAMPLES = 4000
 _MAX_CSV_BYTES = 4 * 1024 * 1024
 _TIMEOUT_S = 15
+_JOB_PATH = re.compile(r"/api/jobs/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}(?:/telemetry)?")
+_JOB_ERRORS = {400: "Bad Request", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed",
+               409: "Conflict", 413: "Content Too Large", 415: "Unsupported Media Type",
+               500: "Internal Server Error", 503: "Service Unavailable"}
 _ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/workspace.css": ("workspace.css", "text/css; charset=utf-8"),
@@ -52,7 +58,7 @@ def _error(status: str, message: str, field: str = "plan") -> _Reply:
     return _json(status, {"message": message, "field": field})
 
 
-def _mission_request(environ: dict[str, Any], run: bool, slots: BoundedSemaphore) -> _Reply:
+def _validated_request(environ: dict[str, Any]) -> bytes | _Reply:
     if environ.get("CONTENT_TYPE", "").split(";", 1)[0].strip().lower() != "application/json":
         return _error("415 Unsupported Media Type", "Send a UTF-8 JSON mission plan.")
     length = environ.get("CONTENT_LENGTH", "")
@@ -74,6 +80,13 @@ def _mission_request(environ: dict[str, Any], run: bool, slots: BoundedSemaphore
     if rows > MAX_WEB_SAMPLES:
         return _error("422 Unprocessable Content", f"Increase the sample interval to stay under {MAX_WEB_SAMPLES:,} rows.",
                       "sample_interval_s")
+    return body
+
+
+def _mission_request(environ: dict[str, Any], run: bool, slots: BoundedSemaphore) -> _Reply:
+    body = _validated_request(environ)
+    if not isinstance(body, bytes):
+        return body
     if not run:
         return _json("200 OK", {"valid": True})
     if not slots.acquire(blocking=False):
@@ -133,7 +146,42 @@ def _stop_worker(worker: subprocess.Popen[bytes]) -> None:
             pass
 
 
-def create_app(port: int) -> Callable[[dict[str, Any], _StartResponse], Iterable[bytes]]:
+class JobClient:
+    """Forward job calls to a fixed, authenticated loopback service."""
+
+    def __init__(self, port: int, token: str):
+        if not 1024 <= port <= 65535 or re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token) is None:
+            raise ValueError("Use a valid job port and set ORBIT_JOB_TOKEN.")
+        self.port = port
+        self.token = token
+
+    def forward(self, method: str, path: str, body: bytes | None = None, key: str = "") -> _Reply:
+        client = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        headers = {"Authorization": f"Bearer {self.token}"}
+        if body is not None:
+            headers.update({"Content-Type": "application/json", "Idempotency-Key": key})
+        try:
+            client.request(method, path, body, headers)
+            response = client.getresponse()
+            status = response.status
+            content_type = response.getheader("Content-Type", "").split(";", 1)[0]
+            if status == 200 and path.endswith("/telemetry") and content_type == "text/csv":
+                result = response.read(_MAX_CSV_BYTES + 1)
+                if len(result) <= _MAX_CSV_BYTES:
+                    return "200 OK", "text/csv; charset=utf-8", result
+            elif content_type == "application/json" and status in (200, 202, *_JOB_ERRORS):
+                result = response.read(4097)
+                if len(result) <= 4096:
+                    reason = {200: "OK", 202: "Accepted", **_JOB_ERRORS}[status]
+                    return f"{status} {reason}", "application/json", result
+        except (OSError, HTTPException):
+            pass
+        finally:
+            client.close()
+        return _error("502 Bad Gateway", "The mission job service is unavailable.")
+
+
+def create_app(port: int, jobs: JobClient | None = None) -> Callable[[dict[str, Any], _StartResponse], Iterable[bytes]]:
     """Build the local workspace app. The preview accepts only loopback authorities."""
     authorities = {f"127.0.0.1:{port}", f"localhost:{port}"}
     assets = files("orbit_sim").joinpath("web_assets")
@@ -147,11 +195,26 @@ def create_app(port: int) -> Callable[[dict[str, Any], _StartResponse], Iterable
         if method == "GET" and path in _ASSETS:
             name, content_type = _ASSETS[path]
             return "200 OK", content_type, assets.joinpath(name).read_bytes()
-        if method == "POST" and path in ("/api/validate", "/api/run"):
+        if method == "GET" and path == "/api/capabilities":
+            return _json("200 OK", {"mission_jobs": jobs is not None})
+        if path in ("/api/validate", "/api/run", "/api/jobs") or _JOB_PATH.fullmatch(path):
             origin = environ.get("HTTP_ORIGIN")
             if (origin is not None and origin != f"http://{host}") or environ.get("HTTP_SEC_FETCH_SITE") == "cross-site":
                 return _error("403 Forbidden", "Only same-origin workspace requests are accepted.")
+        if method == "POST" and path in ("/api/validate", "/api/run"):
+            if path == "/api/run" and jobs is not None:
+                return _error("409 Conflict", "Submit through the mission job service in queued mode.")
             return _mission_request(environ, path == "/api/run", slots)
+        if jobs is not None and method == "POST" and path == "/api/jobs":
+            key = environ.get("HTTP_IDEMPOTENCY_KEY", "")
+            if re.fullmatch(r"[A-Za-z0-9_-]{16,80}", key) is None:
+                return _error("400 Bad Request", "Provide a valid idempotency key.")
+            body = _validated_request(environ)
+            return jobs.forward("POST", "/jobs", body, key) if isinstance(body, bytes) else body
+        if jobs is not None and _JOB_PATH.fullmatch(path) and (
+            method == "GET" or (method == "DELETE" and not path.endswith("/telemetry"))
+        ):
+            return jobs.forward(method, path.removeprefix("/api"))
         return _error("404 Not Found", "Workspace route not found.")
 
     def application(environ: dict[str, Any], start_response: _StartResponse) -> Iterable[bytes]:
@@ -168,6 +231,7 @@ def create_app(port: int) -> Callable[[dict[str, Any], _StartResponse], Iterable
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--job-port", type=int, help="enable queued runs through the Java controller")
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error("port must be between 1024 and 65535")
@@ -175,8 +239,14 @@ def main() -> None:
         from waitress import serve
     except ImportError:
         parser.exit(1, "Install the ORBIT web extra before serving the workspace.\n")
+    jobs = None
+    if args.job_port is not None:
+        try:
+            jobs = JobClient(args.job_port, os.environ.get("ORBIT_JOB_TOKEN", ""))
+        except ValueError as exc:
+            parser.error(str(exc))
     print(f"ORBIT workspace at http://127.0.0.1:{args.port}", flush=True)
-    serve(create_app(args.port), host="127.0.0.1", port=args.port, threads=4, connection_limit=32,
+    serve(create_app(args.port, jobs), host="127.0.0.1", port=args.port, threads=4, connection_limit=32,
           channel_timeout=20, max_request_body_size=_MAX_PLAN_BYTES, max_request_header_size=8192)
 
 

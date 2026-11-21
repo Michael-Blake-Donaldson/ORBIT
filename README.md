@@ -33,6 +33,40 @@ local port. If the project directory is synced and its existing virtual
 environment is locked, set `UV_PROJECT_ENVIRONMENT` to a dedicated
 directory outside the synced tree.
 
+### Run the browser workspace with queued missions
+
+Build the controller and start its private loopback service. Generate a
+unique `ORBIT_JOB_TOKEN` of at least 32 URL-safe characters, and supply the
+same token through the environment of both processes. Keep the token out
+of the command line and source control.
+
+```powershell
+mvn -f controller/pom.xml package
+uv sync --locked --extra web
+$orbitPython = (uv run --locked --extra web python -c "import sys; print(sys.executable)").Trim()
+New-Item -ItemType Directory -Force output | Out-Null
+java -jar controller/target/orbit-controller-0.1.0.jar --serve $orbitPython 8766 output
+```
+
+In a second terminal with the same token in its environment, run:
+
+```powershell
+uv run --locked --extra web orbit-web --job-port 8766
+```
+
+The browser now submits a job explicitly when you select **Run
+simulation**. It displays queued, running, and final states and offers
+**Cancel run** until the job finishes. Completed jobs return the same
+canonical CSV as direct runs. Submissions that repeat the same
+idempotency key and exact plan reuse the existing job. Reusing that key
+with a different plan returns a conflict.
+
+The Java process runs at most two simulations and queues eight more.
+The in-memory registry holds up to 64 jobs. Terminal records and their
+private temporary artifacts expire after 30 minutes. A restart starts a
+new registry. This configuration is a single-workspace integration
+preview with a service-to-service credential.
+
 ## Run a mission
 
 From the repository root, install [uv](https://docs.astral.sh/uv/), Python 3.11

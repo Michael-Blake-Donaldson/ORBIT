@@ -20,6 +20,15 @@ let busy = false;
 let fieldCount = 0;
 let activeRepresentation;
 let orbitDrafts;
+let useMissionJobs = false;
+let activeJob;
+let cancelPending = false;
+
+const jobStates = {
+  queued: "Mission queued…",
+  running: "Simulating mission…",
+  cancelling: "Stopping simulation…",
+};
 
 function numberField([name, label, unit, fallback], value = fallback) {
   const wrapper = document.createElement("label");
@@ -217,6 +226,9 @@ function controls() {
   for (const id of ["upload", "example"]) byId(id).disabled = busy;
   for (const id of ["editor-fields", "run", "validate", "save-plan"]) byId(id).disabled = busy || !plan;
   byId("plan-form").setAttribute("aria-busy", String(busy));
+  const cancel = byId("cancel-run");
+  cancel.hidden = !activeJob;
+  cancel.disabled = cancelPending || activeJob?.state === "cancelling";
 }
 
 function edited() {
@@ -226,15 +238,16 @@ function edited() {
   updateCaption();
 }
 
-async function request(path, body) {
-  const options = body === undefined ? {} : {
-    method: "POST", headers: {"Content-Type": "application/json"}, body,
-  };
-  const response = await fetch(path, options);
+async function request(path, body, method = body === undefined ? "GET" : "POST", key) {
+  const headers = new Headers();
+  if (body !== undefined) headers.set("Content-Type", "application/json");
+  if (key) headers.set("Idempotency-Key", key);
+  const response = await fetch(path, {method, headers, body});
   if (!response.ok) {
     const issue = await response.json().catch(() => ({}));
     const error = new Error(issue.message ?? `Workspace request failed (${response.status}).`);
     error.field = issue.field;
+    error.status = response.status;
     throw error;
   }
   return response;
@@ -267,18 +280,74 @@ async function loadExample() {
   await operate(async () => {
     const response = await request(`/api/examples/${stem}`);
     presentPlan(await response.json(), name, stem);
-    await runPlan();
+    if (useMissionJobs) status("Example ready to run.");
+    else await runPlan();
   }, "Loading example…");
 }
 
 async function runPlan() {
-  status("Simulating mission…");
-  const response = await request("/api/run", JSON.stringify(authoredPlan()));
+  const body = JSON.stringify(authoredPlan());
+  status(useMissionJobs ? "Submitting mission…" : "Simulating mission…");
+  const response = useMissionJobs ? await runQueued(body) : await request("/api/run", body);
+  if (!response) return;
   const csv = await response.blob();
   const rows = parseTelemetry(await csv.text());
   result = {csv, rows, revision, filename};
   showResult();
   status(`${events[rows.at(-1).kind]} · ${rows.length.toLocaleString("en-US")} telemetry rows`);
+}
+
+async function retryJobRequest(send) {
+  try {
+    return await send();
+  } catch (error) {
+    if (!(error instanceof TypeError) && error.status !== 502) throw error;
+    return send();
+  }
+}
+
+async function runQueued(body) {
+  const key = crypto.randomUUID();
+  try {
+    const started = await retryJobRequest(() => request("/api/jobs", body, "POST", key));
+    activeJob = await started.json();
+    const path = `/api/jobs/${activeJob.id}`;
+    const deadline = performance.now() + 120_000;
+    while (Object.hasOwn(jobStates, activeJob.state)) {
+      if (performance.now() >= deadline) throw new Error("The job did not reach a final state in two minutes.");
+      status(jobStates[activeJob.state]);
+      controls();
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      const response = await retryJobRequest(() => request(path));
+      activeJob = await response.json();
+    }
+    if (activeJob.state === "cancelled") {
+      status("Simulation cancelled.");
+      return null;
+    }
+    if (activeJob.state !== "complete") throw new Error(activeJob.message || "The simulation job failed.");
+    return await retryJobRequest(() => request(`${path}/telemetry`));
+  } finally {
+    activeJob = null;
+    controls();
+  }
+}
+
+async function cancelRun() {
+  if (!activeJob || cancelPending) return;
+  const id = activeJob.id;
+  cancelPending = true;
+  controls();
+  try {
+    const response = await retryJobRequest(() => request(`/api/jobs/${id}`, undefined, "DELETE"));
+    const cancellation = await response.json();
+    if (activeJob?.id === id && cancellation.state === "cancelling") activeJob = cancellation;
+  } catch (error) {
+    showError(error);
+  } finally {
+    cancelPending = false;
+    controls();
+  }
 }
 
 function download(blob, name) {
@@ -373,6 +442,7 @@ byId("add-finite").addEventListener("click", () => {
   input.focus();
 });
 byId("example").addEventListener("change", loadExample);
+byId("cancel-run").addEventListener("click", cancelRun);
 byId("upload").addEventListener("change", (event) => {
   const picker = event.currentTarget;
   const file = picker.files[0];
@@ -415,4 +485,16 @@ telemetry.addEventListener("pointerdown", (event) => {
 const resize = new ResizeObserver(redraw);
 resize.observe(trajectory);
 resize.observe(telemetry);
-loadExample();
+
+async function initialize() {
+  controls();
+  try {
+    const capabilities = await request("/api/capabilities");
+    useMissionJobs = (await capabilities.json()).mission_jobs === true;
+    await loadExample();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+initialize();
