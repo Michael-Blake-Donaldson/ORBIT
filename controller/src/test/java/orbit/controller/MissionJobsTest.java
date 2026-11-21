@@ -139,11 +139,12 @@ class MissionJobsTest {
         byte[] hash = java.security.MessageDigest.getInstance("SHA-256").digest(PLAN);
         try (var store = new MissionJobStore(spool)) {
             store.create(running);
-            store.save(new MissionJobStore.Entry(running, OWNER, FIRST, hash, MissionJobs.State.QUEUED, null, null));
+            store.save(new MissionJobStore.Entry(
+                    running, OWNER, FIRST, hash, MissionJobs.State.QUEUED, null, null, null));
             Files.write(store.telemetry(running), CSV);
             store.create(cancelling);
             store.save(new MissionJobStore.Entry(
-                    cancelling, OWNER, SECOND, hash, MissionJobs.State.CANCELLING, null, null));
+                    cancelling, OWNER, SECOND, hash, MissionJobs.State.CANCELLING, null, null, null));
             Path interruptedWork = Files.createTempDirectory(store.directory(cancelling), "work-");
             Files.write(interruptedWork.resolve("telemetry.csv"), CSV);
         }
@@ -157,6 +158,50 @@ class MissionJobsTest {
                 assertTrue(paths.noneMatch(path -> path.endsWith("telemetry.csv")));
             }
         }
+    }
+
+    @Test
+    void tamperedTelemetryFailsBothLiveExportAndRestartRecovery() throws Exception {
+        UUID live;
+        UUID restarted;
+        try (MissionJobs jobs = service((plan, telemetry) -> {
+            Files.write(telemetry, CSV);
+            return new MissionController.Receipt("complete", 0, 1);
+        })) {
+            live = terminal(jobs, jobs.submit(OWNER, FIRST, PLAN).id()).id();
+            restarted = terminal(jobs, jobs.submit(OWNER, SECOND, PLAN).id()).id();
+            alterTelemetry(live);
+            assertEquals(409, assertThrows(MissionJobs.JobException.class, () -> jobs.result(OWNER, live)).status());
+            assertEquals(MissionJobs.State.FAILED, jobs.status(OWNER, live).state());
+        }
+        alterTelemetry(restarted);
+        try (MissionJobs jobs = service((plan, telemetry) -> null)) {
+            assertEquals(MissionJobs.State.FAILED, jobs.status(OWNER, restarted).state());
+            assertEquals(409, assertThrows(MissionJobs.JobException.class, () -> jobs.result(OWNER, restarted)).status());
+        }
+    }
+
+    @Test
+    void checksumsAreBackfilledForExistingCompletedCheckpoints() throws Exception {
+        UUID id;
+        try (MissionJobs jobs = service((plan, telemetry) -> {
+            Files.write(telemetry, CSV);
+            return new MissionController.Receipt("complete", 0, 1);
+        })) {
+            id = terminal(jobs, jobs.submit(OWNER, FIRST, PLAN).id()).id();
+        }
+        Path checkpoint = spool.resolve("orbit-job-store-v1").resolve(id.toString()).resolve("job.properties");
+        String older = Files.readString(checkpoint).replaceAll("(?m)^(schema|telemetry_digest)=.*\\R", "");
+        Files.writeString(checkpoint, older);
+        try (MissionJobs jobs = service((plan, telemetry) -> null)) {
+            assertArrayEquals(CSV, jobs.result(OWNER, id));
+            assertTrue(Files.readString(checkpoint).contains("telemetry_digest="));
+        }
+    }
+
+    private void alterTelemetry(UUID job) throws IOException {
+        Path telemetry = spool.resolve("orbit-job-store-v1").resolve(job.toString()).resolve("telemetry.csv");
+        Files.writeString(telemetry, "time_s,kind,x_km\n0,complete,8000\n");
     }
 
     private static Clock clock(AtomicReference<Instant> time, ZoneId zone) {

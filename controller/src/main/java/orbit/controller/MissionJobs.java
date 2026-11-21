@@ -2,7 +2,6 @@ package orbit.controller;
 
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -96,10 +95,19 @@ final class MissionJobs implements AutoCloseable {
             job.state = record.state();
             job.expires = record.expires();
             job.failure = record.failure();
+            job.telemetryDigest = record.telemetryDigest();
             if (job.state == State.COMPLETE) {
                 try {
+                    if (job.telemetryDigest != null) {
+                        job.checkedTelemetry();
+                    }
                     job.receipt = MissionController.readReceipt(
                             store.telemetry(job.id), MAX_RESULT_ROWS, MAX_RESULT_BYTES);
+                    if (job.telemetryDigest == null) {
+                        // Earlier checkpoints validated the receipt without recording the file digest.
+                        job.telemetryDigest = digest(store.readTelemetry(job.id));
+                        job.checkpoint(State.COMPLETE, job.expires, null, job.telemetryDigest);
+                    }
                 } catch (IOException ignored) {
                     job.finish(State.FAILED, null, "Stored telemetry could not be recovered.");
                     Files.deleteIfExists(store.telemetry(job.id));
@@ -147,7 +155,7 @@ final class MissionJobs implements AutoCloseable {
         Job job = new Job(UUID.randomUUID(), ownerKey, hash, plan.clone());
         store.create(job.id);
         try {
-            job.checkpoint(State.QUEUED, null, null);
+            job.checkpoint(State.QUEUED, null, null, null);
             workers.execute(job);
         } catch (RejectedExecutionException ignored) {
             store.delete(job.id);
@@ -183,7 +191,7 @@ final class MissionJobs implements AutoCloseable {
             workers.remove(job);
             job.body = null;
         } else if (job.state == State.RUNNING) {
-            job.checkpoint(State.CANCELLING, null, null);
+            job.checkpoint(State.CANCELLING, null, null, null);
             job.state = State.CANCELLING;
             job.thread.interrupt();
         }
@@ -195,12 +203,11 @@ final class MissionJobs implements AutoCloseable {
         if (job.state != State.COMPLETE) {
             throw new JobException(409, "Telemetry is available only for successfully completed jobs.");
         }
-        try (var input = Files.newInputStream(store.telemetry(job.id), LinkOption.NOFOLLOW_LINKS)) {
-            byte[] result = input.readNBytes(MAX_RESULT_BYTES + 1);
-            if (result.length > MAX_RESULT_BYTES) {
-                throw new IOException("Job telemetry exceeds the result budget.");
-            }
-            return result;
+        try {
+            return job.checkedTelemetry();
+        } catch (IOException ignored) {
+            job.finish(State.FAILED, null, "Stored telemetry failed its integrity check.");
+            throw new JobException(409, "Stored telemetry failed its integrity check.");
         }
     }
 
@@ -288,6 +295,7 @@ final class MissionJobs implements AutoCloseable {
         private Instant expires;
         private MissionController.Receipt receipt;
         private String failure;
+        private byte[] telemetryDigest;
 
         Job(UUID id, OwnerKey key, byte[] hash, byte[] body) {
             this.id = id;
@@ -300,18 +308,28 @@ final class MissionJobs implements AutoCloseable {
             return new Snapshot(id, state, receipt, failure);
         }
 
-        void checkpoint(State next, Instant expiration, String message) throws IOException {
-            store.save(new MissionJobStore.Entry(id, key.owner(), key.key(), hash, next, expiration, message));
+        void checkpoint(State next, Instant expiration, String message, byte[] artifact) throws IOException {
+            store.save(new MissionJobStore.Entry(id, key.owner(), key.key(), hash, next, expiration, message, artifact));
         }
 
         void finish(State terminal, MissionController.Receipt result, String message) throws IOException {
             Instant expiration = clock.instant().plus(retention);
-            checkpoint(terminal, expiration, message);
+            byte[] artifact = terminal == State.COMPLETE ? digest(store.readTelemetry(id)) : null;
+            checkpoint(terminal, expiration, message, artifact);
             state = terminal;
             thread = null;
             expires = expiration;
             receipt = result;
             failure = message;
+            telemetryDigest = artifact;
+        }
+
+        byte[] checkedTelemetry() throws IOException {
+            byte[] data = store.readTelemetry(id);
+            if (!MessageDigest.isEqual(telemetryDigest, digest(data))) {
+                throw new IOException("Stored telemetry did not match the completed job digest.");
+            }
+            return data;
         }
 
         @Override

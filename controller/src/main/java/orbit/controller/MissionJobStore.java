@@ -33,7 +33,7 @@ final class MissionJobStore implements AutoCloseable {
     private final FileLock lock;
 
     record Entry(UUID id, String owner, String key, byte[] digest, MissionJobs.State state,
-                 Instant expires, String failure) {}
+                 Instant expires, String failure, byte[] telemetryDigest) {}
 
     MissionJobStore(Path spool) throws IOException {
         Path parent = spool.toRealPath();
@@ -89,8 +89,19 @@ final class MissionJobStore implements AutoCloseable {
         Files.move(telemetry, telemetry(id), StandardCopyOption.ATOMIC_MOVE);
     }
 
+    byte[] readTelemetry(UUID id) throws IOException {
+        try (var input = Files.newInputStream(telemetry(id), LinkOption.NOFOLLOW_LINKS)) {
+            byte[] data = input.readNBytes(MissionJobs.MAX_RESULT_BYTES + 1);
+            if (data.length > MissionJobs.MAX_RESULT_BYTES) {
+                throw new IOException("Job telemetry exceeds the result budget.");
+            }
+            return data;
+        }
+    }
+
     void save(Entry entry) throws IOException {
         Properties values = new Properties();
+        values.setProperty("schema", "2");
         values.setProperty("owner", entry.owner());
         values.setProperty("key", entry.key());
         values.setProperty("digest", HexFormat.of().formatHex(entry.digest()));
@@ -100,6 +111,9 @@ final class MissionJobStore implements AutoCloseable {
         }
         if (entry.failure() != null) {
             values.setProperty("failure", entry.failure());
+        }
+        if (entry.telemetryDigest() != null) {
+            values.setProperty("telemetry_digest", HexFormat.of().formatHex(entry.telemetryDigest()));
         }
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         values.store(bytes, null);
@@ -157,6 +171,7 @@ final class MissionJobStore implements AutoCloseable {
                 throw new IOException("Job checkpoint exceeds its size limit.");
             }
             values.load(new ByteArrayInputStream(bytes));
+            String schema = values.getProperty("schema", "1");
             String owner = values.getProperty("owner");
             String key = values.getProperty("key");
             byte[] digest = HexFormat.of().parseHex(values.getProperty("digest", ""));
@@ -164,12 +179,17 @@ final class MissionJobStore implements AutoCloseable {
             String expiry = values.getProperty("expires");
             Instant expires = expiry == null ? null : Instant.parse(expiry);
             String failure = values.getProperty("failure");
-            if (!MissionJobs.validOwner(owner) || !MissionJobs.validKey(key) || digest.length != 32
+            String telemetry = values.getProperty("telemetry_digest");
+            byte[] telemetryDigest = telemetry == null ? null : HexFormat.of().parseHex(telemetry);
+            if ((!schema.equals("1") && !schema.equals("2")) || !MissionJobs.validOwner(owner)
+                    || !MissionJobs.validKey(key) || digest.length != 32
                     || state.terminal() != (expires != null) || (state == MissionJobs.State.FAILED) != (failure != null)
-                    || (failure != null && failure.length() > 240)) {
+                    || (failure != null && failure.length() > 240)
+                    || (schema.equals("2") && (state == MissionJobs.State.COMPLETE) != (telemetryDigest != null))
+                    || (telemetryDigest != null && telemetryDigest.length != 32)) {
                 throw new IOException("Invalid job checkpoint fields.");
             }
-            return new Entry(id, owner, key, digest, state, expires, failure);
+            return new Entry(id, owner, key, digest, state, expires, failure, telemetryDigest);
         } catch (IllegalArgumentException | java.time.DateTimeException e) {
             throw new IOException("Invalid job checkpoint values.", e);
         }

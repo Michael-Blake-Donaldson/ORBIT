@@ -71,7 +71,9 @@ at a time.
 
 Completed results and idempotency keys survive a controller restart.
 Interrupted jobs become failed, and a recorded cancellation becomes
-cancelled. Terminal records and artifacts expire after 30 minutes.
+cancelled. The controller checks completed telemetry against its stored
+SHA-256 digest when recovering a job and when serving an export.
+Terminal records and artifacts expire after 30 minutes.
 The internal API scopes status, cancellation, telemetry, and
 idempotency to the owner supplied by the authenticated gateway. The
 loopback browser preview supplies a single fixed owner.
