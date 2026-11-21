@@ -155,9 +155,11 @@ class JobClient:
         self.port = port
         self.token = token
 
-    def forward(self, method: str, path: str, body: bytes | None = None, key: str = "") -> _Reply:
+    def forward(
+        self, method: str, path: str, body: bytes | None = None, key: str = "", *, owner: str = "local-preview",
+    ) -> _Reply:
         client = HTTPConnection("127.0.0.1", self.port, timeout=5)
-        headers = {"Authorization": f"Bearer {self.token}"}
+        headers = {"Authorization": f"Bearer {self.token}", "X-Orbit-Owner": owner}
         if body is not None:
             headers.update({"Content-Type": "application/json", "Idempotency-Key": key})
         try:

@@ -57,6 +57,16 @@ class MissionHttpServiceTest {
             var result = send(authorized(service, path + "/telemetry"));
             assertEquals(CSV, result.body());
             assertEquals("no-store", result.headers().firstValue("Cache-Control").orElseThrow());
+            assertEquals(404, send(authorized(service, path).setHeader("X-Orbit-Owner", "other-owner")).statusCode());
+            assertEquals(404, send(authorized(service, path + "/telemetry")
+                    .setHeader("X-Orbit-Owner", "other-owner")).statusCode());
+            assertEquals(404, send(authorized(service, path).setHeader("X-Orbit-Owner", "other-owner").DELETE())
+                    .statusCode());
+            var other = send(authorized(service, "/jobs").setHeader("X-Orbit-Owner", "other-owner")
+                    .header("Idempotency-Key", KEY).header("Content-Type", "application/json")
+                    .POST(BodyPublishers.ofString("{}")));
+            assertEquals(202, other.statusCode());
+            assertTrue(!id(other.body()).equals(id));
         }
     }
 
@@ -75,7 +85,8 @@ class MissionHttpServiceTest {
     }
 
     private static HttpRequest.Builder authorized(MissionHttpService service, String path) {
-        return request(service, path).header("Authorization", "Bearer " + TOKEN);
+        return request(service, path).header("Authorization", "Bearer " + TOKEN)
+                .header("X-Orbit-Owner", "test-owner");
     }
 
     private static String id(String json) {

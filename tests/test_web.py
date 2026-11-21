@@ -137,6 +137,9 @@ class WorkspaceTests(unittest.TestCase):
                     response = self.request(f"{path}/telemetry")
                     self.assertEqual(response["status"], "200 OK", response["body"][:240])
                     self.assertIn(b"7200.0,complete,", response["body"])
+                    self.assertEqual(jobs.forward("GET", f"/jobs/{identifier}", owner="other-owner")[0],
+                                     "404 Not Found")
+                    self.assertEqual(self.request(path, HTTP_X_ORBIT_OWNER="other-owner")["status"], "200 OK")
                     self.assertEqual(self.request(path, HTTP_ORIGIN="http://elsewhere.invalid")["status"],
                                      "403 Forbidden")
                     self.check_browser_cancellation()

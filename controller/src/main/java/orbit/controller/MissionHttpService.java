@@ -85,13 +85,14 @@ final class MissionHttpService implements AutoCloseable {
         if (path.equals("/health") && method.equals("GET")) {
             return json(200, "{\"status\":\"ready\"}");
         }
+        String owner = header(exchange, "X-Orbit-Owner");
         if (path.equals("/jobs") && method.equals("POST")) {
             String content = header(exchange, "Content-Type");
             if (content == null || !content.split(";", 2)[0].strip().equalsIgnoreCase("application/json")) {
                 return error(415, "Send a UTF-8 JSON mission plan.");
             }
             byte[] input = exchange.getRequestBody().readNBytes(MissionJobs.MAX_PLAN_BYTES + 1);
-            return snapshot(202, jobs.submit(header(exchange, "Idempotency-Key"), input));
+            return snapshot(202, jobs.submit(owner, header(exchange, "Idempotency-Key"), input));
         }
         String[] parts = path.split("/", -1);
         if ((parts.length == 3 || parts.length == 4) && parts[1].equals("jobs")) {
@@ -105,12 +106,12 @@ final class MissionHttpService implements AutoCloseable {
                 return error(404, "Mission job not found.");
             }
             if (parts.length == 4 && parts[3].equals("telemetry") && method.equals("GET")) {
-                return new Reply(200, TELEMETRY, jobs.result(id));
+                return new Reply(200, TELEMETRY, jobs.result(owner, id));
             }
             if (parts.length == 3) {
                 return switch (method) {
-                    case "GET" -> snapshot(200, jobs.status(id));
-                    case "DELETE" -> snapshot(200, jobs.cancel(id));
+                    case "GET" -> snapshot(200, jobs.status(owner, id));
+                    case "DELETE" -> snapshot(200, jobs.cancel(owner, id));
                     default -> error(405, "Use GET or DELETE for a mission job.");
                 };
             }

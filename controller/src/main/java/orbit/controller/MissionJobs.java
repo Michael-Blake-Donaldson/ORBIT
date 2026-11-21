@@ -24,6 +24,7 @@ final class MissionJobs implements AutoCloseable {
     static final int MAX_RESULT_BYTES = 4 * 1024 * 1024;
     static final int MAX_RESULT_ROWS = 4_000;
     private static final Pattern KEY = Pattern.compile("[A-Za-z0-9_-]{16,80}");
+    private static final Pattern OWNER = Pattern.compile("[A-Za-z0-9_-]{1,128}");
 
     enum State {
         QUEUED, RUNNING, CANCELLING, COMPLETE, FAILED, CANCELLED;
@@ -34,6 +35,8 @@ final class MissionJobs implements AutoCloseable {
     }
 
     record Snapshot(UUID id, State state, MissionController.Receipt receipt, String failure) {}
+
+    private record OwnerKey(String owner, String key) {}
 
     @FunctionalInterface
     interface Worker {
@@ -60,7 +63,7 @@ final class MissionJobs implements AutoCloseable {
     private final ThreadPoolExecutor workers;
     private final int maxEntries;
     private final Map<UUID, Job> jobs = new HashMap<>();
-    private final Map<String, Job> keys = new HashMap<>();
+    private final Map<OwnerKey, Job> keys = new HashMap<>();
     private boolean closed;
 
     MissionJobs(Path spool, int parallelism, int queueSize, int maxEntries, Duration retention, Clock clock,
@@ -74,7 +77,8 @@ final class MissionJobs implements AutoCloseable {
                 new ArrayBlockingQueue<>(queueSize));
     }
 
-    synchronized Snapshot submit(String key, byte[] plan) throws JobException, IOException {
+    synchronized Snapshot submit(String owner, String key, byte[] plan) throws JobException, IOException {
+        requireOwner(owner);
         if (key == null || !KEY.matcher(key).matches()) {
             throw new JobException(400, "Provide a valid idempotency key.");
         }
@@ -86,7 +90,8 @@ final class MissionJobs implements AutoCloseable {
         }
         expire();
         byte[] hash = digest(plan);
-        Job existing = keys.get(key);
+        OwnerKey ownerKey = new OwnerKey(owner, key);
+        Job existing = keys.get(ownerKey);
         if (existing != null) {
             if (!Arrays.equals(existing.hash, hash)) {
                 throw new JobException(409, "This idempotency key is already bound to a different plan.");
@@ -97,25 +102,25 @@ final class MissionJobs implements AutoCloseable {
             throw new JobException(503, "The job store is at capacity. Try again later.");
         }
 
-        Job job = new Job(key, hash, plan.clone());
+        Job job = new Job(ownerKey, hash, plan.clone());
         try {
             workers.execute(job);
         } catch (RejectedExecutionException ignored) {
             throw new JobException(503, "The mission queue is full. Try again shortly.");
         }
         jobs.put(job.id, job);
-        keys.put(key, job);
+        keys.put(ownerKey, job);
         return job.snapshot();
     }
 
-    synchronized Snapshot status(UUID id) throws JobException, IOException {
+    synchronized Snapshot status(String owner, UUID id) throws JobException, IOException {
         expire();
-        return find(id).snapshot();
+        return find(owner, id).snapshot();
     }
 
-    synchronized Snapshot cancel(UUID id) throws JobException, IOException {
+    synchronized Snapshot cancel(String owner, UUID id) throws JobException, IOException {
         expire();
-        Job job = find(id);
+        Job job = find(owner, id);
         cancel(job);
         return job.snapshot();
     }
@@ -131,9 +136,9 @@ final class MissionJobs implements AutoCloseable {
         }
     }
 
-    synchronized byte[] result(UUID id) throws JobException, IOException {
+    synchronized byte[] result(String owner, UUID id) throws JobException, IOException {
         expire();
-        Job job = find(id);
+        Job job = find(owner, id);
         if (job.state != State.COMPLETE) {
             throw new JobException(409, "Telemetry is available only for successfully completed jobs.");
         }
@@ -161,12 +166,19 @@ final class MissionJobs implements AutoCloseable {
         }
     }
 
-    private Job find(UUID id) throws JobException {
+    private Job find(String owner, UUID id) throws JobException {
+        requireOwner(owner);
         Job job = jobs.get(id);
-        if (job == null) {
+        if (job == null || !job.key.owner().equals(owner)) {
             throw new JobException(404, "Mission job not found.");
         }
         return job;
+    }
+
+    private static void requireOwner(String owner) throws JobException {
+        if (owner == null || !OWNER.matcher(owner).matches()) {
+            throw new JobException(400, "A valid job owner is required.");
+        }
     }
 
     private static byte[] digest(byte[] body) {
@@ -192,7 +204,7 @@ final class MissionJobs implements AutoCloseable {
 
     private final class Job implements Runnable {
         private final UUID id = UUID.randomUUID();
-        private final String key;
+        private final OwnerKey key;
         private final byte[] hash;
         private byte[] body;
         private State state = State.QUEUED;
@@ -202,7 +214,7 @@ final class MissionJobs implements AutoCloseable {
         private MissionController.Receipt receipt;
         private String failure;
 
-        Job(String key, byte[] hash, byte[] body) {
+        Job(OwnerKey key, byte[] hash, byte[] body) {
             this.key = key;
             this.hash = hash;
             this.body = body;
