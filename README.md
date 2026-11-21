@@ -78,6 +78,41 @@ The internal API scopes status, cancellation, telemetry, and
 idempotency to the owner supplied by the authenticated gateway. The
 loopback browser preview supplies a single fixed owner.
 
+### Authenticate the workspace behind an AWS load balancer
+
+Hosted mode expects a commercial AWS Application Load Balancer (ALB)
+with an HTTPS listener and an authenticate-Cognito or authenticate-OIDC
+action before it forwards traffic. Register the public callback
+`https://your-domain/oauth2/idpresponse` in the identity provider.
+Set these environment variables in the web process from the actual
+listener and identity provider.
+
+| Setting | Value |
+| --- | --- |
+| `ORBIT_PUBLIC_ORIGIN` | The canonical browser origin, such as `https://orbit.example.com`. |
+| `ORBIT_ALB_ARN` | The ARN of the ALB signing user claims. |
+| `ORBIT_OIDC_ISSUER` | The exact HTTPS issuer configured on the listener. |
+| `ORBIT_OIDC_CLIENT_ID` | The Cognito app client or equivalent OIDC client ID. |
+| `ORBIT_JOB_TOKEN` | The existing private credential shared with the Java controller. |
+
+```powershell
+uv run --locked --extra web --extra hosted orbit-web --job-port 8766 --auth-alb
+```
+
+The workspace remains bound to loopback. Put an HTTPS reverse proxy on
+the same host, restrict its inbound security group to the ALB, and
+preserve the public Host header when forwarding to ORBIT. Configure
+the ALB target group with HTTPS and use `GET /healthz` to check web
+liveness. Allow outbound HTTPS from the web process to the regional
+AWS public-key endpoint for signing key rotation.
+
+ORBIT verifies the signature, signer ARN, issuer, client, expiry, and
+subject in the ALB-signed claims before accepting a request. The Java
+controller receives a stable hash derived from the signed subject.
+Unsigned identity headers and caller-supplied job owners are ignored.
+Browser submissions and cancellations require the configured HTTPS
+origin. [AWS ALB authentication and networking requirements](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/listener-authenticate-users.html)
+
 ## Run a mission
 
 From the repository root, install [uv](https://docs.astral.sh/uv/), Python 3.11

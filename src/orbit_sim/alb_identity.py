@@ -11,6 +11,7 @@ from threading import Lock
 from time import monotonic, time
 from urllib.parse import urlsplit
 
+from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives.asymmetric.ec import (
     SECP256R1,
     EllipticCurvePublicKey,
@@ -21,7 +22,7 @@ from jwt.exceptions import PyJWTError
 
 from .files import parse_json_object
 
-_ARN = re.compile(r"arn:aws:elasticloadbalancing:([a-z]{2}(?:-[a-z0-9]+)+-\d):\d{12}:"
+_ARN = re.compile(r"arn:aws:elasticloadbalancing:([a-z]{2}(?:-[a-z0-9]+)+-[0-9]):[0-9]{12}:"
                   r"loadbalancer/app/[a-zA-Z0-9-]{1,32}/[0-9a-f]{16}")
 _DNS = re.compile(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
                   r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
@@ -130,7 +131,7 @@ class AlbKeys:
             if len(pem) > _MAX_PEM:
                 raise IdentityUnavailable
             key = load_pem_public_key(pem)
-        except (OSError, ValueError, HTTPException) as exc:
+        except (OSError, ValueError, HTTPException, UnsupportedAlgorithm) as exc:
             raise IdentityUnavailable from exc
         finally:
             client.close()

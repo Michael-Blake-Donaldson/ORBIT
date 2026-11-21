@@ -242,10 +242,17 @@ async function request(path, body, method = body === undefined ? "GET" : "POST",
   const headers = new Headers();
   if (body !== undefined) headers.set("Content-Type", "application/json");
   if (key) headers.set("Idempotency-Key", key);
-  const response = await fetch(path, {method, headers, body});
+  const response = await fetch(path, {method, headers, body, redirect: "manual"});
+  if (response.type === "opaqueredirect") {
+    const error = new Error("Sign-in expired. Reload the workspace to sign in again.");
+    error.status = 401;
+    throw error;
+  }
   if (!response.ok) {
     const issue = await response.json().catch(() => ({}));
-    const error = new Error(issue.message ?? `Workspace request failed (${response.status}).`);
+    const message = response.status === 401 ? "Sign-in expired. Reload the workspace to sign in again." :
+      issue.message ?? `Workspace request failed (${response.status}).`;
+    const error = new Error(message);
     error.field = issue.field;
     error.status = response.status;
     throw error;

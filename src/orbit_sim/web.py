@@ -1,4 +1,4 @@
-"""Loopback HTTP adapter for the ORBIT browser workspace."""
+"""HTTP adapter for the ORBIT browser workspace, served on loopback."""
 
 import argparse
 import json
@@ -14,10 +14,13 @@ from math import ceil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import BoundedSemaphore
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .files import parse_json_object
 from .plan import _MAX_PLAN_BYTES, _parse_mission
+
+if TYPE_CHECKING:
+    from .alb_identity import AlbIdentity
 
 MAX_WEB_SAMPLES = 4000
 _MAX_CSV_BYTES = 4 * 1024 * 1024
@@ -183,17 +186,39 @@ class JobClient:
         return _error("502 Bad Gateway", "The mission job service is unavailable.")
 
 
-def create_app(port: int, jobs: JobClient | None = None) -> Callable[[dict[str, Any], _StartResponse], Iterable[bytes]]:
-    """Build the local workspace app. The preview accepts only loopback authorities."""
+def create_app(
+    port: int, jobs: JobClient | None = None, identity: "AlbIdentity | None" = None,
+) -> Callable[[dict[str, Any], _StartResponse], Iterable[bytes]]:
+    """Build the preview or authenticated gateway for the mission workspace."""
     authorities = {f"127.0.0.1:{port}", f"localhost:{port}"}
+    security_headers = _SECURITY_HEADERS.copy()
+    if identity is not None:
+        if jobs is None:
+            raise ValueError("Hosted authentication requires the Java mission job service.")
+        from .alb_identity import IdentityUnavailable, InvalidIdentity
+
+        authorities = {identity.config.host}
+        security_headers.append(("Strict-Transport-Security", "max-age=31536000"))
     assets = files("orbit_sim").joinpath("web_assets")
     slots = BoundedSemaphore(2)
 
     def route(environ: dict[str, Any]) -> _Reply:
+        path, method = environ["PATH_INFO"], environ["REQUEST_METHOD"]
+        if method == "GET" and path == "/healthz":
+            return _json("200 OK", {"status": "alive"})
         host = environ.get("HTTP_HOST", "").lower()
         if host not in authorities:
-            return _error("403 Forbidden", "Open this workspace through its loopback address.")
-        path, method = environ["PATH_INFO"], environ["REQUEST_METHOD"]
+            return _error("403 Forbidden", "Open this workspace through its configured address.")
+        owner = "local-preview"
+        expected_origin = f"http://{host}"
+        if identity is not None:
+            expected_origin = identity.config.origin
+            try:
+                owner = identity.owner(environ.get("HTTP_X_AMZN_OIDC_DATA", ""))
+            except InvalidIdentity:
+                return _error("401 Unauthorized", "Sign in to use the mission workspace.")
+            except IdentityUnavailable:
+                return _error("503 Service Unavailable", "Sign-in verification is temporarily unavailable.")
         if method == "GET" and path in _ASSETS:
             name, content_type = _ASSETS[path]
             return "200 OK", content_type, assets.joinpath(name).read_bytes()
@@ -201,7 +226,8 @@ def create_app(port: int, jobs: JobClient | None = None) -> Callable[[dict[str, 
             return _json("200 OK", {"mission_jobs": jobs is not None})
         if path in ("/api/validate", "/api/run", "/api/jobs") or _JOB_PATH.fullmatch(path):
             origin = environ.get("HTTP_ORIGIN")
-            if (origin is not None and origin != f"http://{host}") or environ.get("HTTP_SEC_FETCH_SITE") == "cross-site":
+            required = origin is not None or (identity is not None and method in ("POST", "DELETE"))
+            if (required and origin != expected_origin) or environ.get("HTTP_SEC_FETCH_SITE") == "cross-site":
                 return _error("403 Forbidden", "Only same-origin workspace requests are accepted.")
         if method == "POST" and path in ("/api/validate", "/api/run"):
             if path == "/api/run" and jobs is not None:
@@ -212,11 +238,11 @@ def create_app(port: int, jobs: JobClient | None = None) -> Callable[[dict[str, 
             if re.fullmatch(r"[A-Za-z0-9_-]{16,80}", key) is None:
                 return _error("400 Bad Request", "Provide a valid idempotency key.")
             body = _validated_request(environ)
-            return jobs.forward("POST", "/jobs", body, key) if isinstance(body, bytes) else body
+            return jobs.forward("POST", "/jobs", body, key, owner=owner) if isinstance(body, bytes) else body
         if jobs is not None and _JOB_PATH.fullmatch(path) and (
             method == "GET" or (method == "DELETE" and not path.endswith("/telemetry"))
         ):
-            return jobs.forward(method, path.removeprefix("/api"))
+            return jobs.forward(method, path.removeprefix("/api"), owner=owner)
         return _error("404 Not Found", "Workspace route not found.")
 
     def application(environ: dict[str, Any], start_response: _StartResponse) -> Iterable[bytes]:
@@ -224,7 +250,7 @@ def create_app(port: int, jobs: JobClient | None = None) -> Callable[[dict[str, 
             status, content_type, body = route(environ)
         except OSError:
             status, content_type, body = _error("500 Internal Server Error", "Workspace resources are unavailable.")
-        start_response(status, [*_SECURITY_HEADERS, ("Content-Type", content_type), ("Content-Length", str(len(body)))])
+        start_response(status, [*security_headers, ("Content-Type", content_type), ("Content-Length", str(len(body)))])
         return [body]
 
     return application
@@ -234,6 +260,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--job-port", type=int, help="enable queued runs through the Java controller")
+    parser.add_argument("--auth-alb", action="store_true", help="require verified AWS load balancer sign-in")
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error("port must be between 1024 and 65535")
@@ -247,9 +274,22 @@ def main() -> None:
             jobs = JobClient(args.job_port, os.environ.get("ORBIT_JOB_TOKEN", ""))
         except ValueError as exc:
             parser.error(str(exc))
+    identity = None
+    if args.auth_alb:
+        if jobs is None:
+            parser.error("--auth-alb requires --job-port")
+        try:
+            from .alb_identity import AlbConfig, AlbIdentity
+        except ImportError:
+            parser.exit(1, "Install the ORBIT hosted extra before enabling ALB sign-in.\n")
+        try:
+            identity = AlbIdentity(AlbConfig.from_environment(os.environ))
+        except ValueError as exc:
+            parser.error(str(exc))
     print(f"ORBIT workspace at http://127.0.0.1:{args.port}", flush=True)
-    serve(create_app(args.port, jobs), host="127.0.0.1", port=args.port, threads=4, connection_limit=32,
-          channel_timeout=20, max_request_body_size=_MAX_PLAN_BYTES, max_request_header_size=8192)
+    serve(create_app(args.port, jobs, identity), host="127.0.0.1", port=args.port, threads=4, connection_limit=32,
+          channel_timeout=20, max_request_body_size=_MAX_PLAN_BYTES,
+          max_request_header_size=32_768 if identity is not None else 8192)
 
 
 if __name__ == "__main__":

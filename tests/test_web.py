@@ -11,6 +11,7 @@ import tempfile
 import time
 import unittest
 from contextlib import contextmanager
+from importlib.util import find_spec
 from pathlib import Path
 from unittest.mock import patch
 
@@ -109,11 +110,7 @@ class WorkspaceTests(unittest.TestCase):
     @unittest.skipUnless(_JAVA and _CONTROLLER.is_file(), "build the Java controller to verify queued browser runs")
     def test_queued_browser_run_reuses_the_request_key_and_serves_completed_csv(self):
         with tempfile.TemporaryDirectory(prefix="orbit controller workspace ") as spool:
-            with socket.socket() as listener:
-                listener.bind(("127.0.0.1", 0))
-                port = listener.getsockname()[1]
-            token = secrets.token_urlsafe()
-            jobs = JobClient(port, token)
+            jobs = self.new_job_client()
             self.app = create_app(8765, jobs)
             with self.running_service(jobs, spool):
                 self.assertEqual(json.loads(self.request("/api/capabilities")["body"]), {"mission_jobs": True})
@@ -146,6 +143,65 @@ class WorkspaceTests(unittest.TestCase):
                 self.assertEqual(json.loads(restored["body"])["state"], "complete")
                 self.assertEqual(self.request(f"{path}/telemetry")["body"], csv_bytes)
 
+    @unittest.skipUnless(
+        _JAVA and _CONTROLLER.is_file() and find_spec("jwt") and find_spec("cryptography"),
+        "build the Java controller and install the hosted extra to verify signed-user integration",
+    )
+    def test_two_signed_users_cannot_share_jobs_or_idempotency_keys(self):
+        import jwt
+        from cryptography.hazmat.primitives.asymmetric.ec import (
+            SECP256R1,
+            generate_private_key,
+        )
+
+        from orbit_sim.alb_identity import AlbConfig, AlbIdentity
+
+        config = AlbConfig(
+            "https://orbit.example.com",
+            "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/orbit/0123456789abcdef",
+            "https://identity.example.com/pool", "orbit-client",
+        )
+        signing_key = generate_private_key(SECP256R1())
+        identity = AlbIdentity(config, lambda _key_id: signing_key.public_key(), lambda: 1000.0)
+        signed_header = {
+            "kid": "01234567-1234-1234-1234-0123456789ab",
+            "signer": config.signer, "iss": config.issuer, "client": config.client, "exp": 1300,
+        }
+
+        def session(subject):
+            token = jwt.encode({"sub": subject}, signing_key, algorithm="ES256", headers=signed_header)
+            return {"HTTP_X_AMZN_OIDC_DATA": token, "HTTP_ORIGIN": config.origin, "HTTP_HOST": config.host}
+
+        first_user, second_user = session("researcher-a"), session("researcher-b")
+        jobs = self.new_job_client()
+        self.app = create_app(8765, jobs, identity)
+        with (
+            tempfile.TemporaryDirectory(prefix="orbit signed user workspace ") as spool,
+            self.running_service(jobs, spool),
+        ):
+            plan = self.request("/api/examples/hohmann", **first_user)["body"]
+            request_key = secrets.token_urlsafe()
+            first = self.request("/api/jobs", plan, HTTP_IDEMPOTENCY_KEY=request_key, **first_user)
+            self.assertEqual(first["status"], "202 Accepted", first["body"])
+            first_path = f"/api/jobs/{json.loads(first['body'])['id']}"
+            spoofed = second_user | {"HTTP_X_ORBIT_OWNER": identity.owner(first_user["HTTP_X_AMZN_OIDC_DATA"])}
+            for path, method in ((first_path, "GET"), (first_path, "DELETE"), (f"{first_path}/telemetry", "GET")):
+                self.assertEqual(self.request(path, REQUEST_METHOD=method, **spoofed)["status"], "404 Not Found")
+            second = self.request("/api/jobs", plan, HTTP_IDEMPOTENCY_KEY=request_key, **second_user)
+            self.assertEqual(second["status"], "202 Accepted", second["body"])
+            second_path = f"/api/jobs/{json.loads(second['body'])['id']}"
+            self.assertNotEqual(first_path, second_path)
+            for path, headers in ((first_path, first_user), (second_path, second_user)):
+                self.assertEqual(self.wait_for_job(path, **headers)["state"], "complete")
+                self.assertIn(b"7200.0,complete,", self.request(f"{path}/telemetry", **headers)["body"])
+
+    @staticmethod
+    def new_job_client():
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+        return JobClient(port, secrets.token_urlsafe())
+
     @contextmanager
     def running_service(self, jobs, spool):
         environment = dict(os.environ, ORBIT_JOB_TOKEN=jobs.token)
@@ -170,9 +226,9 @@ class WorkspaceTests(unittest.TestCase):
             time.sleep(0.05)
         self.fail("Java job service did not reach readiness")
 
-    def wait_for_job(self, path):
+    def wait_for_job(self, path, **headers):
         for _ in range(160):
-            response = self.request(path)
+            response = self.request(path, **headers)
             self.assertEqual(response["status"], "200 OK", response["body"])
             status = json.loads(response["body"])
             if status["state"] in ("complete", "cancelled", "failed"):
