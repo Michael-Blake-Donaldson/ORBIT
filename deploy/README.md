@@ -53,8 +53,8 @@ to its parent directory.
 
 Use the hosted overlay on the deployment host. Configure the AWS
 listener for Cognito or OIDC before forwarding. The target group uses
-HTTPS on port 8443 and `GET /healthz` for health checks. Permit inbound
-target traffic only from the ALB security group. The workspace needs
+HTTPS on port 8443 and `GET /readyz` to check workspace and controller
+availability. Permit inbound target traffic only from the ALB security group. The workspace needs
 outbound HTTPS to the regional ALB public-key endpoint.
 [AWS ALB authentication requirements](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/listener-authenticate-users.html)
 

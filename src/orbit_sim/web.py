@@ -106,9 +106,11 @@ def _run_mission(body: bytes) -> _Reply:
         plan, telemetry = (Path(directory) / name for name in ("plan.json", "telemetry.csv"))
         plan.write_bytes(body)
         log_path = Path(directory) / "diagnostic.txt"
+        environment = os.environ.copy()
+        environment.pop("ORBIT_JOB_TOKEN", None)
         with log_path.open("wb") as diagnostics, subprocess.Popen(
             [sys.executable, "-I", "-X", "utf8", "-m", "orbit_sim", "--", str(plan), str(telemetry)],
-            cwd=directory, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=diagnostics,
+            cwd=directory, env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=diagnostics,
             start_new_session=os.name != "nt",
         ) as worker:
             try:
@@ -161,8 +163,9 @@ class JobClient:
 
     def forward(
         self, method: str, path: str, body: bytes | None = None, key: str = "", *, owner: str = "local-preview",
+        timeout: float = 5,
     ) -> _Reply:
-        client = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        client = HTTPConnection("127.0.0.1", self.port, timeout=timeout)
         headers = {"Authorization": f"Bearer {self.token}", "X-Orbit-Owner": owner}
         if body is not None:
             headers.update({"Content-Type": "application/json", "Idempotency-Key": key})
@@ -171,15 +174,19 @@ class JobClient:
             response = client.getresponse()
             status = response.status
             content_type = response.getheader("Content-Type", "").split(";", 1)[0]
+            length = response.getheader("Content-Length", "")
+            if response.getheader("Transfer-Encoding") is not None or re.fullmatch(r"[0-9]{1,8}", length) is None:
+                return _error("502 Bad Gateway", "The mission job service returned an invalid response.")
+            size = int(length)
             if status == 200 and path.endswith("/telemetry") and content_type == "text/csv":
-                result = response.read(_MAX_CSV_BYTES + 1)
-                if len(result) <= _MAX_CSV_BYTES:
+                if size <= _MAX_CSV_BYTES and len(result := response.read(size)) == size:
                     return "200 OK", "text/csv; charset=utf-8", result
-            elif content_type == "application/json" and status in (200, 202, *_JOB_ERRORS):
-                result = response.read(4097)
-                if len(result) <= 4096:
-                    reason = {200: "OK", 202: "Accepted", **_JOB_ERRORS}[status]
-                    return f"{status} {reason}", "application/json", result
+            elif (
+                content_type == "application/json" and status in (200, 202, *_JOB_ERRORS)
+                and size <= 4096 and len(result := response.read(size)) == size
+            ):
+                reason = {200: "OK", 202: "Accepted", **_JOB_ERRORS}[status]
+                return f"{status} {reason}", "application/json", result
         except (OSError, HTTPException):
             pass
         finally:
@@ -207,6 +214,10 @@ def create_app(
         path, method = environ["PATH_INFO"], environ["REQUEST_METHOD"]
         if method == "GET" and path == "/healthz":
             return _json("200 OK", {"status": "alive"})
+        if method == "GET" and path == "/readyz":
+            if jobs is not None and jobs.forward("GET", "/health", timeout=1)[0] != "200 OK":
+                return _json("503 Service Unavailable", {"status": "unavailable"})
+            return _json("200 OK", {"status": "ready"})
         host = environ.get("HTTP_HOST", "").lower()
         if host not in authorities:
             return _error("403 Forbidden", "Open this workspace through its configured address.")

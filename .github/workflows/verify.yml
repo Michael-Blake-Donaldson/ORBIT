@@ -109,7 +109,7 @@ jobs:
         run: |
           docker compose -p orbit-ci-hosted -f deploy/compose.yaml -f deploy/compose.hosted.yaml up --wait --wait-timeout 90
           args=(--noproxy '*' --cacert "$ORBIT_TLS_CERT_PATH" --resolve 'orbit-deployment.test:8443:127.0.0.1' -H 'Host: orbit-deployment.test' -sS)
-          curl "${args[@]}" --fail https://orbit-deployment.test:8443/healthz
+          curl "${args[@]}" --fail https://orbit-deployment.test:8443/readyz
           status="$(curl "${args[@]}" -o /dev/null -w '%{http_code}' -H 'X-Amzn-Oidc-Identity: forged-user' 'https://orbit-deployment.test:8443/api/capabilities')"
           test "$status" = 401
 

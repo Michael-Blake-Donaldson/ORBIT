@@ -106,7 +106,8 @@ uv run --locked --extra web --extra hosted orbit-web --job-port 8766 --auth-alb
 The workspace remains bound to loopback. Put an HTTPS reverse proxy on
 the same host, restrict its inbound security group to the ALB, and
 preserve the public Host header when forwarding to ORBIT. Configure
-the ALB target group with HTTPS and use `GET /healthz` to check web
+the ALB target group with HTTPS and use `GET /readyz` to check that the
+workspace can reach the mission controller. Use `GET /healthz` for workspace
 liveness. Allow outbound HTTPS from the web process to the regional
 AWS public-key endpoint for signing key rotation.
 

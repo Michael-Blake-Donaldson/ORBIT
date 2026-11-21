@@ -37,7 +37,7 @@ def main() -> int:
         return 2
     mode = sys.argv[1]
     if mode == "check-workspace":
-        return _check(8765, "/healthz", {})
+        return _check(8765, "/readyz", {})
     try:
         token = _credential()
     except (OSError, ValueError):

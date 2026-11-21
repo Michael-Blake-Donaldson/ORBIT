@@ -80,10 +80,12 @@ def main() -> None:
     if args.restart_controller and re.fullmatch(r"[a-z0-9][a-z0-9_-]*", args.restart_controller) is None:
         parser.error("supply the exact name of the preview Compose project")
 
+    _require_status(_request("/readyz")[0], 200, "workspace readiness")
     code, page = _request("/")
     _require_status(code, 200, "workspace")
     if b'id="plan-form"' not in page:
         raise SystemExit("The deployed workspace is missing its mission form.")
+    _require_status(_request("/jobs.mjs")[0], 200, "job session module")
     code, plan = _request("/api/examples/hohmann")
     _require_status(code, 200, "Hohmann example")
     key = secrets.token_urlsafe()

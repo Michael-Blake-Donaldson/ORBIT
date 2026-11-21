@@ -11,9 +11,10 @@ import tempfile
 import time
 import unittest
 from contextlib import contextmanager
+from http.client import HTTPResponse
 from importlib.util import find_spec
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from orbit_sim.web import JobClient, create_app
 
@@ -95,8 +96,28 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn(b'id="plan-form"', response["body"])
         self.assertIn("frame-ancestors 'none'", response["headers"]["Content-Security-Policy"])
         self.assertEqual(response["headers"]["Cache-Control"], "no-store")
+        self.assertEqual(self.request("/jobs.mjs")["status"], "200 OK")
         self.assertEqual(self.request("/api/examples/lunar")["status"], "404 Not Found")
         self.assertEqual(self.request("/../pyproject.toml")["status"], "404 Not Found")
+
+    def test_preview_worker_does_not_inherit_controller_token(self):
+        plan = self.request("/api/examples/hohmann")["body"]
+        with (
+            patch.dict(os.environ, ORBIT_JOB_TOKEN=secrets.token_urlsafe()),
+            patch("orbit_sim.web.subprocess.Popen", wraps=subprocess.Popen) as launch,
+        ):
+            self.assertEqual(self.request("/api/run", plan)["status"], "200 OK")
+        self.assertNotIn("ORBIT_JOB_TOKEN", launch.call_args.kwargs["env"])
+
+    def test_job_bridge_rejects_truncated_controller_responses(self):
+        jobs = self.new_job_client()
+        for path, content_type in (("/health", "application/json"), ("/jobs/test/telemetry", "text/csv")):
+            with self.subTest(content_type=content_type), patch("orbit_sim.web.HTTPConnection") as connection:
+                raw = f"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nContent-Type: {content_type}\r\n\r\n".encode()
+                response = HTTPResponse(Mock(makefile=Mock(return_value=io.BytesIO(raw + b"short"))))
+                response.begin()
+                connection.return_value.getresponse.return_value = response
+                self.assertEqual(jobs.forward("GET", path)[0], "502 Bad Gateway")
 
     def test_a_worker_deadline_returns_an_error_and_releases_the_run_slot(self):
         plan = self.request("/api/examples/hohmann")["body"]
@@ -112,7 +133,10 @@ class WorkspaceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="orbit controller workspace ") as spool:
             jobs = self.new_job_client()
             self.app = create_app(8765, jobs)
+            self.assertEqual(self.request("/readyz")["status"], "503 Service Unavailable")
+            self.assertEqual(self.request("/healthz")["status"], "200 OK")
             with self.running_service(jobs, spool):
+                self.assertEqual(self.request("/readyz")["status"], "200 OK")
                 self.assertEqual(json.loads(self.request("/api/capabilities")["body"]), {"mission_jobs": True})
                 plan = self.request("/api/examples/hohmann")["body"]
                 self.assertEqual(self.request("/api/run", plan)["status"], "409 Conflict")
@@ -137,6 +161,7 @@ class WorkspaceTests(unittest.TestCase):
                                  "403 Forbidden")
                 self.check_browser_cancellation()
             with self.running_service(jobs, spool):
+                self.assertEqual(self.request("/readyz")["status"], "200 OK")
                 restored = self.request("/api/jobs", plan, HTTP_IDEMPOTENCY_KEY=key)
                 self.assertEqual(restored["status"], "202 Accepted", restored["body"])
                 self.assertEqual(json.loads(restored["body"])["id"], identifier)
