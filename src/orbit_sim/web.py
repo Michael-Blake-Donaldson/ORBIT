@@ -35,6 +35,7 @@ _ASSETS = {
     "/workspace.mjs": ("workspace.mjs", "text/javascript; charset=utf-8"),
     "/plots.mjs": ("plots.mjs", "text/javascript; charset=utf-8"),
     "/mission.mjs": ("mission.mjs", "text/javascript; charset=utf-8"),
+    "/jobs.mjs": ("jobs.mjs", "text/javascript; charset=utf-8"),
     "/api/examples/hohmann": ("missions/hohmann.json", "application/json"),
     "/api/examples/finite-burn": ("missions/finite-burn.json", "application/json"),
     "/api/examples/j2-precession": ("missions/j2-precession.json", "application/json"),

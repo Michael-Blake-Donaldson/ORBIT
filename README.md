@@ -61,6 +61,8 @@ simulation**. It displays queued, running, and final states and offers
 canonical CSV as direct runs. Submissions that repeat the same
 idempotency key and exact plan reuse the existing job. Reusing that key
 with a different plan returns a conflict.
+If a response is lost, retry from the same browser tab with the same
+plan to resume monitoring or retrieve the original result.
 
 The Java process runs at most two simulations and queues eight more.
 Each owner can have up to four queued or running jobs and 16 retained

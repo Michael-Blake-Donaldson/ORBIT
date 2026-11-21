@@ -1,3 +1,4 @@
+import {JobSession, jobIsActive} from "./jobs.mjs";
 import {cartesian, elapsed, events, keplerian, measure, parseTelemetry, propellant} from "./mission.mjs";
 import {drawOrbit, drawTelemetry, sampleAtPointer} from "./plots.mjs";
 
@@ -29,6 +30,7 @@ const jobStates = {
   running: "Simulating mission…",
   cancelling: "Stopping simulation…",
 };
+const jobSession = new JobSession(request);
 
 function numberField([name, label, unit, fallback], value = fallback) {
   const wrapper = document.createElement("label");
@@ -227,7 +229,7 @@ function controls() {
   for (const id of ["editor-fields", "run", "validate", "save-plan"]) byId(id).disabled = busy || !plan;
   byId("plan-form").setAttribute("aria-busy", String(busy));
   const cancel = byId("cancel-run");
-  cancel.hidden = !activeJob;
+  cancel.hidden = !jobIsActive(activeJob?.state);
   cancel.disabled = cancelPending || activeJob?.state === "cancelling";
 }
 
@@ -242,7 +244,7 @@ async function request(path, body, method = body === undefined ? "GET" : "POST",
   const headers = new Headers();
   if (body !== undefined) headers.set("Content-Type", "application/json");
   if (key) headers.set("Idempotency-Key", key);
-  const response = await fetch(path, {method, headers, body, redirect: "manual"});
+  const response = await fetch(path, {method, headers, body, redirect: "manual", signal: AbortSignal.timeout(23_000)});
   if (response.type === "opaqueredirect") {
     const error = new Error("Sign-in expired. Reload the workspace to sign in again.");
     error.status = 401;
@@ -295,49 +297,28 @@ async function loadExample() {
 async function runPlan() {
   const body = JSON.stringify(authoredPlan());
   status(useMissionJobs ? "Submitting mission…" : "Simulating mission…");
-  const response = useMissionJobs ? await runQueued(body) : await request("/api/run", body);
-  if (!response) return;
-  const csv = await response.blob();
-  const rows = parseTelemetry(await csv.text());
-  result = {csv, rows, revision, filename};
-  showResult();
-  status(`${events[rows.at(-1).kind]} · ${rows.length.toLocaleString("en-US")} telemetry rows`);
-}
-
-async function retryJobRequest(send) {
   try {
-    return await send();
-  } catch (error) {
-    if (!(error instanceof TypeError) && error.status !== 502) throw error;
-    return send();
-  }
-}
-
-async function runQueued(body) {
-  const key = crypto.randomUUID();
-  try {
-    const started = await retryJobRequest(() => request("/api/jobs", body, "POST", key));
-    activeJob = await started.json();
-    const path = `/api/jobs/${activeJob.id}`;
-    const deadline = performance.now() + 120_000;
-    while (Object.hasOwn(jobStates, activeJob.state)) {
-      if (performance.now() >= deadline) throw new Error("The job did not reach a final state in two minutes.");
-      status(jobStates[activeJob.state]);
-      controls();
-      await new Promise((resolve) => setTimeout(resolve, 350));
-      const response = await retryJobRequest(() => request(path));
-      activeJob = await response.json();
-    }
-    if (activeJob.state === "cancelled") {
+    const response = useMissionJobs ? await jobSession.run(body, showJobState) : await request("/api/run", body);
+    if (response === null) {
       status("Simulation cancelled.");
-      return null;
+      return;
     }
-    if (activeJob.state !== "complete") throw new Error(activeJob.message || "The simulation job failed.");
-    return await retryJobRequest(() => request(`${path}/telemetry`));
+    const csv = await response.blob();
+    const rows = parseTelemetry(await csv.text());
+    jobSession.acknowledgeResult();
+    result = {csv, rows, revision, filename};
+    showResult();
+    status(`${events[rows.at(-1).kind]} · ${rows.length.toLocaleString("en-US")} telemetry rows`);
   } finally {
     activeJob = null;
     controls();
   }
+}
+
+function showJobState(snapshot) {
+  activeJob = snapshot;
+  if (jobIsActive(snapshot.state)) status(jobStates[snapshot.state]);
+  controls();
 }
 
 async function cancelRun() {
@@ -346,11 +327,9 @@ async function cancelRun() {
   cancelPending = true;
   controls();
   try {
-    const response = await retryJobRequest(() => request(`/api/jobs/${id}`, undefined, "DELETE"));
-    const cancellation = await response.json();
-    if (activeJob?.id === id && cancellation.state === "cancelling") activeJob = cancellation;
+    await jobSession.cancel(showJobState);
   } catch (error) {
-    showError(error);
+    if (activeJob?.id === id) showError(error);
   } finally {
     cancelPending = false;
     controls();
