@@ -2,6 +2,8 @@
 
 import argparse
 import json
+import os
+import signal
 import subprocess
 import sys
 from collections.abc import Callable, Iterable
@@ -87,16 +89,17 @@ def _run_mission(body: bytes) -> _Reply:
         plan, telemetry = (Path(directory) / name for name in ("plan.json", "telemetry.csv"))
         plan.write_bytes(body)
         log_path = Path(directory) / "diagnostic.txt"
-        try:
-            with log_path.open("wb") as diagnostics:
-                result = subprocess.run(
-                    [sys.executable, "-I", "-X", "utf8", "-m", "orbit_sim", "--", str(plan), str(telemetry)],
-                    cwd=directory, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=diagnostics,
-                    timeout=_TIMEOUT_S, check=False,
-                )
-        except subprocess.TimeoutExpired:
-            return _error("422 Unprocessable Content", "Simulation exceeded the workspace time limit.")
-        if result.returncode != 0:
+        with log_path.open("wb") as diagnostics, subprocess.Popen(
+            [sys.executable, "-I", "-X", "utf8", "-m", "orbit_sim", "--", str(plan), str(telemetry)],
+            cwd=directory, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=diagnostics,
+            start_new_session=os.name != "nt",
+        ) as worker:
+            try:
+                exit_status = worker.wait(timeout=_TIMEOUT_S)
+            except subprocess.TimeoutExpired:
+                _stop_worker(worker)
+                return _error("422 Unprocessable Content", "Simulation exceeded the workspace time limit.")
+        if exit_status != 0:
             with log_path.open("rb") as diagnostics:
                 message = diagnostics.read(400).decode("utf-8", errors="replace").strip()
             if message.startswith("ORBIT error: "):
@@ -108,6 +111,26 @@ def _run_mission(body: bytes) -> _Reply:
             return _error("422 Unprocessable Content", "The result exceeds the workspace telemetry limit.",
                           "sample_interval_s")
         return "200 OK", "text/csv; charset=utf-8", csv_bytes
+
+
+def _stop_worker(worker: subprocess.Popen[bytes]) -> None:
+    if os.name == "nt":
+        # The Windows virtual-environment executable can launch a separate interpreter.
+        taskkill = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"
+        try:
+            subprocess.run(
+                [str(taskkill), "/PID", str(worker.pid), "/T", "/F"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=3, check=False, creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        finally:
+            if worker.poll() is None:
+                worker.kill()
+    else:
+        try:
+            os.killpg(worker.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def create_app(port: int) -> Callable[[dict[str, Any], _StartResponse], Iterable[bytes]]:

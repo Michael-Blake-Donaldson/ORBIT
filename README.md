@@ -5,6 +5,34 @@ Cartesian trajectories, applies scheduled burns, and streams telemetry.
 The Java mission controller runs the Python worker in an isolated interpreter,
 enforces a timeout, and publishes the completed CSV.
 
+## Open the browser mission workspace
+
+```powershell
+uv run --locked --extra web orbit-web
+```
+
+Open [the loopback workspace](http://127.0.0.1:8765/). It starts by
+running the Hohmann example. Import a version 1 mission JSON or choose
+another example. Edit a Cartesian or Keplerian initial orbit, elapsed
+duration, sampling cadence, gravity, propellant settings, and impulses
+or finite burns. Each initial-orbit representation maintains its own
+draft. Imported advanced settings remain in the plan. Use **Validate**
+to check the plan with the same Python validator used by the CLI.
+
+**Run simulation** updates the flight summary, ECI trajectory, and
+telemetry plots. Pick a maneuver from the event menu or step one row
+at a time to inspect coincident before- and after-burn states. **Save
+JSON** downloads the current plan, and **Export telemetry** downloads
+the last completed run in canonical ORBIT CSV format. Editing a plan
+marks its prior result accordingly.
+
+This preview listens on loopback only. The web adapter caps plans
+at 256 KiB and results at 4,000 rows, allows two simulations in flight,
+and sets a 15-second worker deadline. Use `--port` to choose another
+local port. If the project directory is synced and its existing virtual
+environment is locked, set `UV_PROJECT_ENVIRONMENT` to a dedicated
+directory outside the synced tree.
+
 ## Run a mission
 
 From the repository root, install [uv](https://docs.astral.sh/uv/), Python 3.11
@@ -414,6 +442,7 @@ finishes.
 mvn -f controller/pom.xml package
 mvn -f viewer/pom.xml test
 uv run --locked python -m unittest discover -s tests -v
+node --test tests/test_browser_workspace.mjs
 uv run --locked python tools/profile_mission.py examples/j2_precession.json --runs 7 --profile
 ```
 

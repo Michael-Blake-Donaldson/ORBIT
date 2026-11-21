@@ -3,6 +3,7 @@ import io
 import json
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from orbit_sim.web import create_app
 
@@ -67,3 +68,29 @@ class WorkspaceTests(unittest.TestCase):
         result = self.request("/api/validate", json.dumps(plan).encode())
         self.assertEqual(result["status"], "422 Unprocessable Content")
         self.assertEqual(json.loads(result["body"])["field"], "sample_interval_s")
+
+    def test_a_late_maneuver_failure_returns_no_telemetry(self):
+        plan = json.loads(self.request("/api/examples/hohmann")["body"])
+        plan["spacecraft"]["dry_mass_kg"] = 650
+        response = self.request("/api/run", json.dumps(plan).encode())
+        self.assertEqual(response["status"], "422 Unprocessable Content")
+        self.assertEqual(response["headers"]["Content-Type"], "application/json")
+        self.assertIn("dry mass", json.loads(response["body"])["message"])
+
+    def test_workspace_headers_and_asset_allowlist(self):
+        response = self.request("/")
+        self.assertEqual(response["status"], "200 OK")
+        self.assertIn(b'id="plan-form"', response["body"])
+        self.assertIn("frame-ancestors 'none'", response["headers"]["Content-Security-Policy"])
+        self.assertEqual(response["headers"]["Cache-Control"], "no-store")
+        self.assertEqual(self.request("/api/examples/lunar")["status"], "404 Not Found")
+        self.assertEqual(self.request("/../pyproject.toml")["status"], "404 Not Found")
+
+    def test_a_worker_deadline_returns_an_error_and_releases_the_run_slot(self):
+        plan = self.request("/api/examples/hohmann")["body"]
+        with patch("orbit_sim.web._TIMEOUT_S", 0.02):
+            for _ in range(2):
+                response = self.request("/api/run", plan)
+                self.assertEqual(response["status"], "422 Unprocessable Content", response["body"])
+                self.assertIn("workspace time limit", json.loads(response["body"])["message"])
+        self.assertEqual(self.request("/api/run", plan)["status"], "200 OK")

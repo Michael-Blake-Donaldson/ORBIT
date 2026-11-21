@@ -46,7 +46,13 @@ jobs:
           enable-cache: false
 
       - name: Install the locked Python environment
-        run: uv sync --locked --managed-python
+        run: uv sync --locked --managed-python --extra web
+
+      - name: Install Node for browser module tests
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
 
       - name: Build the Java controller
         run: mvn --batch-mode --no-transfer-progress -f controller/pom.xml verify
@@ -55,4 +61,7 @@ jobs:
         run: mvn --batch-mode --no-transfer-progress -f viewer/pom.xml verify
 
       - name: Verify physics and controller integration
-        run: uv run --locked --managed-python python -m unittest discover -s tests -v
+        run: uv run --locked --managed-python --extra web python -m unittest discover -s tests -v
+
+      - name: Verify browser telemetry parsing and navigation
+        run: node --test tests/test_browser_workspace.mjs
