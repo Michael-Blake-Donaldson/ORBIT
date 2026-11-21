@@ -65,3 +65,60 @@ jobs:
 
       - name: Verify browser telemetry parsing and navigation
         run: node --test tests/test_browser_workspace.mjs
+
+  container:
+    name: Packaged workspace smoke test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      ORBIT_APP_IMAGE: orbit-workspace:ci
+      ORBIT_TARGET_BIND_IP: 127.0.0.1
+      ORBIT_PUBLIC_ORIGIN: https://orbit-deployment.test
+      ORBIT_ALB_ARN: arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/orbit/0123456789abcdef
+      ORBIT_OIDC_ISSUER: https://identity.example.com/pool
+      ORBIT_OIDC_CLIENT_ID: local-integration
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Create temporary test secrets
+        shell: bash
+        run: |
+          secret_dir="$(mktemp -d "$RUNNER_TEMP/orbit-deploy.XXXXXXXX")"
+          openssl rand -hex 32 > "$secret_dir/job-token"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -subj '/CN=orbit-deployment.test' -addext 'subjectAltName=DNS:orbit-deployment.test' \
+            -out "$secret_dir/cert.pem" -keyout "$secret_dir/key.pem"
+          chmod 0444 "$secret_dir/job-token" "$secret_dir/cert.pem" "$secret_dir/key.pem"
+          {
+            printf 'ORBIT_JOB_TOKEN_PATH=%s/job-token\n' "$secret_dir"
+            printf 'ORBIT_TLS_CERT_PATH=%s/cert.pem\n' "$secret_dir"
+            printf 'ORBIT_TLS_KEY_PATH=%s/key.pem\n' "$secret_dir"
+          } >> "$GITHUB_ENV"
+
+      - name: Build and start loopback preview
+        run: docker compose -p orbit-ci-preview -f deploy/compose.yaml -f deploy/compose.preview.yaml up --build --wait --wait-timeout 90
+
+      - name: Run, restart, and cancel missions through the packaged workspace
+        run: python3 tools/smoke_container.py --restart-controller orbit-ci-preview
+
+      - name: Verify the hosted TLS profile rejects unsigned identities
+        shell: bash
+        run: |
+          docker compose -p orbit-ci-hosted -f deploy/compose.yaml -f deploy/compose.hosted.yaml up --wait --wait-timeout 90
+          args=(--noproxy '*' --cacert "$ORBIT_TLS_CERT_PATH" --resolve 'orbit-deployment.test:8443:127.0.0.1' -H 'Host: orbit-deployment.test' -sS)
+          curl "${args[@]}" --fail https://orbit-deployment.test:8443/healthz
+          status="$(curl "${args[@]}" -o /dev/null -w '%{http_code}' -H 'X-Amzn-Oidc-Identity: forged-user' 'https://orbit-deployment.test:8443/api/capabilities')"
+          test "$status" = 401
+
+      - name: Clean up preview resources
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${ORBIT_JOB_TOKEN_PATH:-}" ]]; then
+            docker compose -p orbit-ci-preview -f deploy/compose.yaml -f deploy/compose.preview.yaml down --volumes
+            docker compose -p orbit-ci-hosted -f deploy/compose.yaml -f deploy/compose.hosted.yaml down --volumes
+            rm -f -- "$ORBIT_JOB_TOKEN_PATH" "$ORBIT_TLS_CERT_PATH" "$ORBIT_TLS_KEY_PATH"
+          fi

@@ -113,6 +113,12 @@ Unsigned identity headers and caller-supplied job owners are ignored.
 Browser submissions and cancellations require the configured HTTPS
 origin. [AWS ALB authentication and networking requirements](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/listener-authenticate-users.html)
 
+### Package the web deployment with Docker
+
+The [deployment guide](deploy/README.md) covers a loopback preview and
+an HTTPS target behind an authenticated AWS load balancer. Both use
+the same image and persist completed jobs in a dedicated volume.
+
 ## Run a mission
 
 From the repository root, install [uv](https://docs.astral.sh/uv/), Python 3.11
