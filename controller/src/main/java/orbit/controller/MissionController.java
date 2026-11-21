@@ -25,7 +25,7 @@ public final class MissionController {
     private MissionController() {}
 
     public static void main(String[] args) {
-        System.exit(run(args));
+        System.exit(args.length > 0 && args[0].equals("--serve") ? MissionHttpService.serve(args) : run(args));
     }
 
     static int run(String[] args) {
@@ -98,13 +98,14 @@ public final class MissionController {
 
     static Receipt simulate(Path python, Path plan, Path telemetry, int timeout, int maxRows, int maxBytes,
                             ProcessBuilder.Redirect diagnostics) throws IOException, InterruptedException {
-        Process worker = new ProcessBuilder(
+        ProcessBuilder command = new ProcessBuilder(
                 python.toString(), "-I", "-X", "utf8", "-m", "orbit_sim", "--",
                 plan.toString(), telemetry.toString())
                 .directory(telemetry.getParent().toFile())
                 .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                .redirectError(diagnostics)
-                .start();
+                .redirectError(diagnostics);
+        command.environment().remove("ORBIT_JOB_TOKEN");
+        Process worker = command.start();
         try {
             worker.getOutputStream().close();
             if (!worker.waitFor(timeout, TimeUnit.SECONDS)) {
