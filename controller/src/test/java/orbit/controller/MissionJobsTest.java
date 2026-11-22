@@ -24,7 +24,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 class MissionJobsTest {
     private static final byte[] PLAN = "{}".getBytes(StandardCharsets.UTF_8);
-    private static final byte[] CSV = "time_s,kind,x_km\n0,complete,7000\n".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] CSV = MissionControllerTest.COMPLETE_CSV.getBytes(StandardCharsets.UTF_8);
     private static final String OWNER = "test-owner";
     private static final String FIRST = "example-run-key-01";
     private static final String SECOND = "example-run-key-02";
@@ -239,7 +239,7 @@ class MissionJobsTest {
 
     private void alterTelemetry(UUID job) throws IOException {
         Path telemetry = spool.resolve("orbit-job-store-v1").resolve(job.toString()).resolve("telemetry.csv");
-        Files.writeString(telemetry, "time_s,kind,x_km\n0,complete,8000\n");
+        Files.writeString(telemetry, MissionControllerTest.COMPLETE_CSV.replace(",7000,", ",8000,"));
     }
 
     private static Clock clock(AtomicReference<Instant> time, ZoneId zone) {

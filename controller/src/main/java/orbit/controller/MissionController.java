@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.util.Iterator;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -21,6 +22,12 @@ public final class MissionController {
     private static final int MAX_TIMEOUT_SECONDS = 3600;
     static final int MAX_ROWS = 100_000;
     static final int MAX_CSV_BYTES = 64 * 1024 * 1024;
+    private static final String TELEMETRY_HEADER = "time_s,kind,x_km,y_km,z_km,vx_km_s,vy_km_s,vz_km_s,"
+            + "altitude_km,speed_km_s,specific_energy_km2_s2,mass_kg,semi_major_axis_km,eccentricity,"
+            + "inclination_deg,raan_deg,argument_of_periapsis_deg,true_anomaly_deg";
+    private static final Set<String> TELEMETRY_KINDS = Set.of(
+            "sample", "pre_burn", "post_burn", "burn_start", "burn_end", "periapsis", "apoapsis", "complete", "impact");
+    private static final Pattern DECIMAL = Pattern.compile("[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?");
     private static final Pattern TERMINAL_CONTROLS = Pattern.compile("[\\p{Cc}\\p{Cf}]");
 
     private MissionController() {}
@@ -136,31 +143,46 @@ public final class MissionController {
             throw new IOException("worker did not provide a regular telemetry file within the size limit");
         }
         try (BufferedReader file = Files.newBufferedReader(telemetry)) {
-            String header = file.readLine();
-            if (header == null || !header.startsWith("time_s,kind,")) {
+            if (!TELEMETRY_HEADER.equals(file.readLine())) {
                 throw new IOException("invalid telemetry header");
             }
             int rows = 0;
-            String last = "";
+            double elapsed = 0;
+            String outcome = null;
+            var decimal = DECIMAL.matcher("");
             for (String line = file.readLine(); line != null; line = file.readLine()) {
                 if (++rows > maxRows) {
                     throw new IOException("telemetry exceeds the row limit");
                 }
-                last = line;
+                if (outcome != null) {
+                    throw new IOException("telemetry contains rows after the terminal state");
+                }
+                String[] fields = line.split(",", -1);
+                if (fields.length != 18 || !TELEMETRY_KINDS.contains(fields[1])) {
+                    throw new IOException("invalid telemetry row " + rows);
+                }
+                for (int column = 0; column < fields.length; column++) {
+                    // Mass, semi-major axis, and singular angles may be undefined.
+                    if (column == 1 || (fields[column].isEmpty() && (column == 11 || column == 12 || column >= 14))) {
+                        continue;
+                    }
+                    if (!decimal.reset(fields[column]).matches() || !Double.isFinite(Double.parseDouble(fields[column]))) {
+                        throw new IOException("invalid numeric value in telemetry row " + rows);
+                    }
+                }
+                double time = Double.parseDouble(fields[0]);
+                if (time < elapsed || (rows == 1 && time != 0)) {
+                    throw new IOException("invalid timestamp in telemetry row " + rows);
+                }
+                elapsed = time;
+                if (fields[1].equals("complete") || fields[1].equals("impact")) {
+                    outcome = fields[1];
+                }
             }
-            String[] fields = last.split(",", 3);
-            if (fields.length != 3 || !(fields[1].equals("complete") || fields[1].equals("impact"))) {
+            if (outcome == null) {
                 throw new IOException("telemetry is missing a terminal row");
             }
-            try {
-                double elapsed = Double.parseDouble(fields[0]);
-                if (!Double.isFinite(elapsed) || elapsed < 0) {
-                    throw new NumberFormatException();
-                }
-                return new Receipt(fields[1], elapsed, rows);
-            } catch (NumberFormatException e) {
-                throw new IOException("invalid terminal telemetry timestamp", e);
-            }
+            return new Receipt(outcome, elapsed, rows);
         }
     }
 

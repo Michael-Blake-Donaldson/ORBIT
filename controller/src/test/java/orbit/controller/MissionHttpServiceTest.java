@@ -20,7 +20,7 @@ import org.junit.jupiter.api.io.TempDir;
 class MissionHttpServiceTest {
     private static final String TOKEN = "controller-integration-example-token";
     private static final String KEY = "request-key-unique-01";
-    private static final String CSV = "time_s,kind,x_km\n0,complete,7000\n";
+    private static final String CSV = MissionControllerTest.COMPLETE_CSV;
     private static final Pattern JOB = Pattern.compile("\"id\":\"([a-f0-9-]+)\"");
     private final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
 
