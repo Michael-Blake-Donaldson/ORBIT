@@ -388,8 +388,13 @@ final class MissionJobs implements AutoCloseable {
                 Path plan = Files.write(staging.resolve("plan.json"), planBytes);
                 result = worker.run(plan, staging.resolve("telemetry.csv"));
             } catch (MissionController.WorkerFailure e) {
-                failureMessage = e.status() == 124 ? "The simulation exceeded its deadline."
-                        : "The simulation rejected the mission plan.";
+                failureMessage = switch (e.status()) {
+                    case 124 -> "The simulation exceeded its deadline.";
+                    case MissionController.ROW_LIMIT_EXIT ->
+                            "Telemetry exceeded " + MAX_RESULT_ROWS + " rows including detected events. "
+                                    + "Increase the sample interval.";
+                    default -> "The simulation rejected the mission plan.";
+                };
             } catch (IOException | RuntimeException e) {
                 failureMessage = "The simulation could not produce valid telemetry.";
             } catch (InterruptedException e) {

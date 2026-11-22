@@ -316,10 +316,18 @@ class Mission:
             previous_time = impulse.time_s
         burns = self._validated_finite_burns(duration, impulses)
         object.__setattr__(self, "finite_burns", burns)
-        if ceil(duration / interval) + 1 + 2 * (len(impulses) + len(burns)) > MAX_SAMPLES:
+        if self._scheduled_sample_rows() > MAX_SAMPLES:
             raise ValueError(f"mission exceeds the {MAX_SAMPLES} telemetry row budget")
         if ceil(duration / self.integrator.max_step_s) > 50_000:
             raise ValueError("mission exceeds the integration step budget for the chosen max_step_s")
+
+    def _scheduled_sample_rows(self) -> int:
+        interval = self.sample_interval_s
+        epochs = {impulse.time_s for impulse in self.impulses}
+        epochs.update(time for burn in self.finite_burns for time in (burn.start_s, burn.end_s))
+        # A shared boundary replaces one cadence row. The terminal row is always separate.
+        replaced = sum(time < self.duration_s and round(time / interval) * interval == time for time in epochs)
+        return ceil(self.duration_s / interval) + 1 + 2 * (len(self.impulses) + len(self.finite_burns)) - replaced
 
     def _validated_third_bodies(self, duration: float) -> tuple[ThirdBody, ...]:
         if not isinstance(self.third_bodies, (tuple, list)) or len(self.third_bodies) > MAX_THIRD_BODIES:

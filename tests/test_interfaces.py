@@ -79,6 +79,15 @@ class PlanTests(FileTestCase):
 
 
 class PythonCliTests(FileTestCase):
+    def test_telemetry_row_limit_aborts_publication(self):
+        result = self.launch(self.python_command() + ["--max-rows", "3"])
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("3 telemetry row budget", result.stderr)
+        self.assertEqual(list(self.directory.iterdir()), [self.plan])
+        result = self.launch(self.python_command() + ["--max-rows", "4"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.rows()), 4)
+
     def test_csv_contract_and_existing_output(self):
         result = self.launch(self.python_command())
         self.assertEqual(result.returncode, 0, result.stderr)

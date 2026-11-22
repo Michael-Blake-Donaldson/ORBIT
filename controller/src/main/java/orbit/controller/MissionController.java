@@ -22,6 +22,8 @@ public final class MissionController {
     private static final int MAX_TIMEOUT_SECONDS = 3600;
     static final int MAX_ROWS = 100_000;
     static final int MAX_CSV_BYTES = 64 * 1024 * 1024;
+    // Exit status reserved by the Python worker for its explicit telemetry row limit.
+    static final int ROW_LIMIT_EXIT = 3;
     private static final String TELEMETRY_HEADER = "time_s,kind,x_km,y_km,z_km,vx_km_s,vy_km_s,vz_km_s,"
             + "altitude_km,speed_km_s,specific_energy_km2_s2,mass_kg,semi_major_axis_km,eccentricity,"
             + "inclination_deg,raan_deg,argument_of_periapsis_deg,true_anomaly_deg";
@@ -107,7 +109,7 @@ public final class MissionController {
     static Receipt simulate(Path python, Path plan, Path telemetry, int timeout, int maxRows, int maxBytes,
                             ProcessBuilder.Redirect diagnostics) throws IOException, InterruptedException {
         ProcessBuilder command = new ProcessBuilder(
-                python.toString(), "-I", "-X", "utf8", "-m", "orbit_sim", "--",
+                python.toString(), "-I", "-X", "utf8", "-m", "orbit_sim", "--max-rows", Integer.toString(maxRows), "--",
                 plan.toString(), telemetry.toString())
                 .directory(telemetry.getParent().toFile())
                 .redirectOutput(ProcessBuilder.Redirect.DISCARD)
@@ -119,8 +121,12 @@ public final class MissionController {
             if (!worker.waitFor(timeout, TimeUnit.SECONDS)) {
                 throw new WorkerFailure(124, "simulation exceeded the " + timeout + " second timeout");
             }
-            if (worker.exitValue() != 0) {
-                throw new WorkerFailure(1, "simulation worker exited with code " + worker.exitValue());
+            int status = worker.exitValue();
+            if (status == ROW_LIMIT_EXIT) {
+                throw new WorkerFailure(status, "simulation exceeded the " + maxRows + " telemetry row limit");
+            }
+            if (status != 0) {
+                throw new WorkerFailure(1, "simulation worker exited with code " + status);
             }
         } finally {
             if (worker.isAlive()) {

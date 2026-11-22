@@ -61,6 +61,7 @@ class FiniteBurnTests(unittest.TestCase):
         by_time = {}
         for sample in propagate(mission):
             by_time.setdefault(sample.time_s, []).append(sample)
+        self.assertEqual(mission._scheduled_sample_rows(), sum(map(len, by_time.values())))
         transition = by_time[50]
         self.assertEqual([row.kind for row in transition], ["burn_end", "pre_burn", "post_burn", "burn_start"])
         self.assertEqual([row.kind for row in by_time[100]], ["burn_end", "complete"])

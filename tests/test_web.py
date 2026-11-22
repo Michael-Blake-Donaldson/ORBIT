@@ -82,6 +82,33 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(result["status"], "422 Unprocessable Content")
         self.assertEqual(json.loads(result["body"])["field"], "sample_interval_s")
 
+    def test_detected_event_rows_can_exceed_the_web_budget(self):
+        plan = self.plan_at_cadence_limit()
+        self.assertEqual(self.request("/api/validate", plan)["status"], "200 OK")
+        result = self.request("/api/run", plan)
+        self.assertEqual(result["status"], "422 Unprocessable Content")
+        issue = json.loads(result["body"])
+        self.assertEqual(issue["field"], "sample_interval_s")
+        self.assertIn("including detected events", issue["message"])
+
+    def test_on_grid_impulses_replace_cadence_rows_at_the_budget(self):
+        plan = {
+            "schema_version": 1, "duration_s": 3997, "sample_interval_s": 1,
+            "initial_orbit": {"periapsis_radius_km": 7000, "eccentricity": 0},
+            "impulses": [{"time_s": time, "delta_v_km_s": [0, 0.01, 0]} for time in (0, 15)],
+        }
+        body = json.dumps(plan).encode()
+        self.assertEqual(self.request("/api/validate", body)["status"], "200 OK")
+        result = self.request("/api/run", body)
+        self.assertEqual(result["status"], "200 OK", result["body"][:240])
+        self.assertEqual(result["body"].count(b"\n"), 4001)
+
+    @staticmethod
+    def plan_at_cadence_limit():
+        plan = json.loads((_EXAMPLES / "apsides.json").read_bytes())
+        plan["sample_interval_s"] = 2.551
+        return json.dumps(plan).encode()
+
     def test_a_late_maneuver_failure_returns_no_telemetry(self):
         plan = json.loads(self.request("/api/examples/hohmann")["body"])
         plan["spacecraft"]["dry_mass_kg"] = 650
@@ -160,6 +187,13 @@ class WorkspaceTests(unittest.TestCase):
                 self.assertEqual(self.request(path, HTTP_ORIGIN="http://elsewhere.invalid")["status"],
                                  "403 Forbidden")
                 self.check_browser_cancellation()
+                over_budget = self.request("/api/jobs", self.plan_at_cadence_limit(), HTTP_IDEMPOTENCY_KEY=secrets.token_urlsafe())
+                self.assertEqual(over_budget["status"], "202 Accepted")
+                overflow_path = f"/api/jobs/{json.loads(over_budget['body'])['id']}"
+                failure = self.wait_for_job(overflow_path)
+                self.assertEqual(failure["state"], "failed")
+                self.assertIn("including detected events", failure["message"])
+                self.assertEqual(self.request(f"{overflow_path}/telemetry")["status"], "409 Conflict")
             with self.running_service(jobs, spool):
                 self.assertEqual(self.request("/readyz")["status"], "200 OK")
                 restored = self.request("/api/jobs", plan, HTTP_IDEMPOTENCY_KEY=key)

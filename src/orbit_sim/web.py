@@ -10,12 +10,12 @@ import sys
 from collections.abc import Callable, Iterable
 from http.client import HTTPConnection, HTTPException
 from importlib.resources import files
-from math import ceil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import BoundedSemaphore
 from typing import TYPE_CHECKING, Any
 
+from .cli import _ROW_LIMIT_EXIT
 from .files import parse_json_object
 from .plan import _MAX_PLAN_BYTES, _parse_mission
 
@@ -78,10 +78,7 @@ def _validated_request(environ: dict[str, Any]) -> bytes | _Reply:
     except (ValueError, TypeError) as exc:
         return _error("422 Unprocessable Content", str(exc)[:240])
 
-    rows = ceil(mission.duration_s / mission.sample_interval_s) + 1 + 2 * (
-        len(mission.impulses) + len(mission.finite_burns)
-    )
-    if rows > MAX_WEB_SAMPLES:
+    if mission._scheduled_sample_rows() > MAX_WEB_SAMPLES:
         return _error("422 Unprocessable Content", f"Increase the sample interval to stay under {MAX_WEB_SAMPLES:,} rows.",
                       "sample_interval_s")
     return body
@@ -109,7 +106,8 @@ def _run_mission(body: bytes) -> _Reply:
         environment = os.environ.copy()
         environment.pop("ORBIT_JOB_TOKEN", None)
         with log_path.open("wb") as diagnostics, subprocess.Popen(
-            [sys.executable, "-I", "-X", "utf8", "-m", "orbit_sim", "--", str(plan), str(telemetry)],
+            [sys.executable, "-I", "-X", "utf8", "-m", "orbit_sim", "--max-rows", str(MAX_WEB_SAMPLES),
+             "--", str(plan), str(telemetry)],
             cwd=directory, env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=diagnostics,
             start_new_session=os.name != "nt",
         ) as worker:
@@ -118,6 +116,10 @@ def _run_mission(body: bytes) -> _Reply:
             except subprocess.TimeoutExpired:
                 _stop_worker(worker)
                 return _error("422 Unprocessable Content", "Simulation exceeded the workspace time limit.")
+        if exit_status == _ROW_LIMIT_EXIT:
+            return _error("422 Unprocessable Content",
+                          f"Telemetry exceeded {MAX_WEB_SAMPLES:,} rows including detected events. Increase the sample interval.",
+                          "sample_interval_s")
         if exit_status != 0:
             with log_path.open("rb") as diagnostics:
                 message = diagnostics.read(400).decode("utf-8", errors="replace").strip()

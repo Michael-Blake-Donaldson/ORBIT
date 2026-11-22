@@ -9,11 +9,12 @@ from pathlib import Path
 from .errors import SimulationError
 from .files import atomic_text_output
 from .mechanics import OrbitalElements
-from .mission import Mission
+from .mission import MAX_SAMPLES, Mission
 from .plan import load_mission
 from .propagation import propagate
 
 _ELEMENT_COLUMNS = tuple(field.name for field in fields(OrbitalElements))
+_ROW_LIMIT_EXIT = 3
 _HEADER = (
     "time_s", "kind", "x_km", "y_km", "z_km", "vx_km_s", "vy_km_s", "vz_km_s",
     "altitude_km", "speed_km_s", "specific_energy_km2_s2", "mass_kg",
@@ -21,13 +22,19 @@ _HEADER = (
 )
 
 
-def _write_telemetry(mission: Mission, destination: Path) -> tuple[int, str]:
+class _TelemetryLimit(SimulationError):
+    """The telemetry writer reached its requested row limit."""
+
+
+def _write_telemetry(mission: Mission, destination: Path, max_rows: int = MAX_SAMPLES) -> tuple[int, str]:
     count = 0
     outcome = ""
     with atomic_text_output(destination) as file:
         writer = csv.writer(file, lineterminator="\n")
         writer.writerow(_HEADER)
         for sample in propagate(mission):
+            if count == max_rows:
+                raise _TelemetryLimit(f"mission exceeds the {max_rows} telemetry row budget")
             writer.writerow((
                 sample.time_s, sample.kind, *sample.state.position_km, *sample.state.velocity_km_s,
                 sample.altitude_km, sample.speed_km_s, sample.specific_energy_km2_s2, sample.mass_kg,
@@ -40,16 +47,19 @@ def _write_telemetry(mission: Mission, destination: Path) -> tuple[int, str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Propagate one ORBIT mission and write telemetry.")
+    parser.add_argument("--max-rows", type=int, default=MAX_SAMPLES, help="maximum telemetry rows, excluding the header")
     parser.add_argument("mission", type=Path, help="version 1 JSON mission plan")
     parser.add_argument("output", type=Path, help="new telemetry CSV in an existing directory")
     args = parser.parse_args(argv)
+    if not 1 <= args.max_rows <= MAX_SAMPLES:
+        parser.error(f"--max-rows must be between 1 and {MAX_SAMPLES}")
     try:
         mission = load_mission(args.mission)
-        count, outcome = _write_telemetry(mission, args.output)
+        count, outcome = _write_telemetry(mission, args.output, args.max_rows)
     except (OSError, ValueError, SimulationError) as exc:
         # Escape control characters before sending untrusted input details to a terminal.
         message = str(exc)[:320]
         print(f"ORBIT error: {message!r}", file=sys.stderr)
-        return 1
+        return _ROW_LIMIT_EXIT if isinstance(exc, _TelemetryLimit) else 1
     print(f"ORBIT {outcome}: {count} telemetry rows")
     return 0

@@ -27,9 +27,9 @@ the last completed run in canonical ORBIT CSV format. Editing a plan
 marks its prior result accordingly.
 
 This preview listens on loopback only. The web adapter caps plans
-at 256 KiB and results at 4,000 rows, allows two simulations in flight,
-and sets a 15-second worker deadline. Use `--port` to choose another
-local port. If the project directory is synced and its existing virtual
+at 256 KiB and results at 4,000 rows including detected events, allows two
+simulations in flight, and sets a 15-second worker deadline. Use `--port`
+to choose another local port. If the project directory is synced and its existing virtual
 environment is locked, set `UV_PROJECT_ENVIRONMENT` to a dedicated
 directory outside the synced tree.
 
