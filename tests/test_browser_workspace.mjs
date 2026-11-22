@@ -28,6 +28,16 @@ test("reject incomplete, decreasing, or non-finite telemetry", () => {
   assert.throws(() => parseTelemetry(start + row(1, "complete", "Infinity")), /invalid telemetry row/);
 });
 
+test("reject premature terminal rows and invalid values in unplotted columns", () => {
+  const start = header + "\n" + row(0, "sample");
+  assert.throws(() => parseTelemetry(start + row(1, "impact") + row(2, "complete")), /terminal row/);
+  for (const [index, invalid] of [[0, "0x1"], [10, "NaN"], [11, " "], [13, ""], [16, "Infinity"]]) {
+    const fields = row(1, "complete").trimEnd().split(",");
+    fields[index] = invalid;
+    assert.throws(() => parseTelemetry(start + fields.join(",")), /invalid telemetry row/);
+  }
+});
+
 test("elapsed time labels retain milliseconds and can exceed a day", () => {
   assert.equal(elapsed(4607.5111276723765), "01:16:47.511");
   assert.equal(elapsed(86400), "24:00:00.000");

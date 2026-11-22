@@ -23,8 +23,11 @@ export const metrics = {
   mass: { label: "Mass", unit: "kg" }, axis: { label: "Semi-major axis", unit: "km" },
 };
 
+const decimal = /^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/;
+const optionalColumns = new Set([11, 12, 14, 15, 16, 17]);
+
 export function parseTelemetry(csv) {
-  const [header, ...lines] = csv.trimEnd().split(/\r?\n/);
+  const [header, ...lines] = csv.replace(/\r?\n$/, "").split(/\r?\n/);
   const expected = "time_s,kind,x_km,y_km,z_km,vx_km_s,vy_km_s,vz_km_s,altitude_km,speed_km_s," +
     "specific_energy_km2_s2,mass_kg,semi_major_axis_km,eccentricity,inclination_deg,raan_deg," +
     "argument_of_periapsis_deg,true_anomaly_deg";
@@ -32,15 +35,16 @@ export function parseTelemetry(csv) {
     throw new Error("The workspace returned an unexpected telemetry format.");
   }
   let previousTime = -1;
-  const rows = lines.map((line) => {
+  const rows = lines.map((line, index) => {
     const values = line.split(",");
     const [time, kind, x, y, z, vx, vy, vz, altitude, speed, , mass, axis] = values;
-    const required = [time, x, y, z, vx, vy, vz, altitude, speed];
     if (values.length !== 18 || !Object.hasOwn(events, kind) ||
-        required.some((value) => value.trim() === "" || !Number.isFinite(Number(value))) ||
-        Number(time) < previousTime ||
-        [mass, axis].some((value) => value !== "" && !Number.isFinite(Number(value)))) {
+        values.some((value, column) => column !== 1 && !(value === "" && optionalColumns.has(column)) &&
+          (!decimal.test(value) || !Number.isFinite(Number(value)))) || Number(time) < previousTime) {
       throw new Error("The workspace returned an invalid telemetry row.");
+    }
+    if ((kind === "complete" || kind === "impact") && index !== lines.length - 1) {
+      throw new Error("The workspace returned telemetry after a terminal row.");
     }
     previousTime = Number(time);
     return {time: previousTime, kind, position: [Number(x), Number(y), Number(z)],
