@@ -79,7 +79,8 @@ docker compose -p orbit-hosted -f deploy/compose.yaml -f deploy/compose.hosted.y
 Use private host storage for the job volume and keep its backups under
 the same access controls. Use one controller per volume. Completed
 jobs are retained for 30 minutes, including across a controller
-restart. When replacing the edge container or updating the image,
+restart. Explicitly saved runs remain in the same volume until deleted.
+When replacing the edge container or updating the image,
 stop and recreate the whole Compose project with `down` followed by
 `up`. That preserves the named volume and reconnects all three
 containers to the new edge namespace.

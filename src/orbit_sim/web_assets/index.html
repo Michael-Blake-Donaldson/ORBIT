@@ -50,6 +50,20 @@
           <div class="button-row"><button class="button primary" id="run" type="submit" disabled>Run simulation</button><button class="button secondary" id="validate" type="button" disabled>Validate</button><button class="button secondary" id="cancel-run" type="button" hidden>Cancel run</button></div>
         </footer>
       </form>
+      <section class="form-section" id="saved-runs" aria-labelledby="saved-runs-title" hidden>
+        <div class="subhead"><h2 id="saved-runs-title">Saved runs</h2><button class="text-button" id="refresh-saved" type="button">Refresh</button></div>
+        <label class="sr-only" for="saved-run">Saved mission run</label>
+        <select id="saved-run"><option value="">No saved runs</option></select>
+        <div class="button-row saved-actions">
+          <button class="button secondary" id="open-saved" type="button">Open</button>
+          <button class="button secondary" id="delete-saved" type="button">Delete</button>
+          <button class="button secondary" id="save-result" type="button">Save displayed run</button>
+        </div>
+        <div class="button-row saved-actions" id="saved-exports" hidden>
+          <button class="text-button" id="export-original" type="button">Original plan JSON</button>
+          <button class="text-button" id="export-manifest" type="button">Run manifest</button>
+        </div>
+      </section>
     </section>
     <section class="results" aria-labelledby="results-title">
       <header class="results-heading"><div><h2 id="results-title">Flight results</h2><p id="result-caption">Run a mission to populate the trajectory and telemetry.</p></div><button class="button secondary" id="download" type="button" disabled>Export telemetry</button></header>

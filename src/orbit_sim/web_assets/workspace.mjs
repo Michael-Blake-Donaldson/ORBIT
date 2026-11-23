@@ -12,6 +12,7 @@ const maneuvers = byId("maneuvers");
 const trajectory = byId("trajectory");
 const telemetry = byId("telemetry");
 const slider = byId("sample-index");
+const savedMenu = byId("saved-run");
 let plan;
 let filename = "mission";
 let result;
@@ -231,6 +232,11 @@ function controls() {
   const cancel = byId("cancel-run");
   cancel.hidden = !jobIsActive(activeJob?.state);
   cancel.disabled = cancelPending || activeJob?.state === "cancelling";
+  savedMenu.disabled = busy || savedMenu.options.length <= 1;
+  for (const id of ["open-saved", "delete-saved"]) byId(id).disabled = busy || !savedMenu.value;
+  byId("refresh-saved").disabled = busy;
+  byId("save-result").disabled = busy || !result?.receipt || Boolean(result.receipt.saved_at);
+  byId("saved-exports").hidden = !result?.receipt?.saved_at;
 }
 
 function edited() {
@@ -307,7 +313,7 @@ async function runPlan() {
     const {csv, receipt} = download;
     const rows = parseTelemetry(await csv.text(), receipt);
     jobSession.acknowledgeResult();
-    result = {csv, rows, revision, filename};
+    result = {csv, rows, revision, filename, receipt, originalPlan: new Blob([body], {type: "application/json"})};
     showResult();
     status(`${events[rows.at(-1).kind]} · ${rows.length.toLocaleString("en-US")} telemetry rows`);
   } finally {
@@ -345,6 +351,36 @@ function download(blob, name) {
   link.download = name;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function refreshSavedRuns(selected = savedMenu.value) {
+  const response = await request("/api/saved-runs");
+  const runs = await response.json();
+  savedMenu.replaceChildren(new Option(runs.length ? "Select a run" : "No saved runs", ""));
+  for (const run of runs) {
+    const date = new Date(run.saved_at).toLocaleString();
+    savedMenu.append(new Option(`${date} · ${events[run.outcome]} · ${run.id.slice(0, 8)}`, run.id));
+  }
+  savedMenu.value = runs.some((run) => run.id === selected) ? selected : "";
+  controls();
+}
+
+async function openSavedRun(id) {
+  const path = `/api/jobs/${id}`;
+  const [statusResponse, planResponse, telemetryResponse] = await Promise.all([
+    request(path), request(`${path}/plan`), request(`${path}/telemetry`),
+  ]);
+  const [receipt, originalPlan, csv] = await Promise.all([
+    statusResponse.json(), planResponse.blob(), telemetryResponse.blob(),
+  ]);
+  const [original, telemetryText] = await Promise.all([originalPlan.text(), csv.text()]);
+  const rows = parseTelemetry(telemetryText, receipt);
+  const stem = `run-${id.slice(0, 8)}`;
+  presentPlan(JSON.parse(original), `Saved run ${id.slice(0, 8)}`, stem);
+  byId("example").selectedIndex = -1;
+  result = {csv, rows, revision, filename: stem, receipt, originalPlan};
+  showResult();
+  status("Saved run opened.");
 }
 
 function updateCaption() {
@@ -460,6 +496,30 @@ byId("save-plan").addEventListener("click", () => {
 });
 byId("download").addEventListener("click", () => download(result.csv, `${result.filename}-telemetry.csv`));
 slider.addEventListener("input", () => inspect(slider.valueAsNumber));
+savedMenu.addEventListener("change", controls);
+byId("refresh-saved").addEventListener("click", () => operate(refreshSavedRuns, "Loading saved runs…"));
+byId("open-saved").addEventListener("click", () => operate(() => openSavedRun(savedMenu.value), "Opening saved run…"));
+byId("save-result").addEventListener("click", () => operate(async () => {
+  const response = await request(`/api/jobs/${result.receipt.id}/saved`, undefined, "PUT");
+  result.receipt = await response.json();
+  await refreshSavedRuns(result.receipt.id);
+  status("Run saved.");
+}, "Saving run…"));
+byId("delete-saved").addEventListener("click", () => {
+  const id = savedMenu.value;
+  if (!id || !window.confirm("Delete this saved run and its stored telemetry?")) return;
+  operate(async () => {
+    await request(`/api/jobs/${id}/saved`, undefined, "DELETE");
+    if (result?.receipt?.id === id) result.receipt = null;
+    await refreshSavedRuns();
+    status("Saved run deleted.");
+  }, "Deleting saved run…");
+});
+byId("export-original").addEventListener("click", () => download(result.originalPlan, `${result.filename}-original.json`));
+byId("export-manifest").addEventListener("click", () => {
+  const manifest = JSON.stringify({schema_version: 1, ...result.receipt}, null, 2) + "\n";
+  download(new Blob([manifest], {type: "application/json"}), `${result.filename}-manifest.json`);
+});
 byId("events").addEventListener("change", (event) => {
   if (event.target.value !== "") inspect(Number(event.target.value));
 });
@@ -479,7 +539,9 @@ async function initialize() {
   try {
     const capabilities = await request("/api/capabilities");
     useMissionJobs = (await capabilities.json()).mission_jobs === true;
+    byId("saved-runs").hidden = !useMissionJobs;
     await loadExample();
+    if (useMissionJobs) await refreshSavedRuns();
   } catch (error) {
     showError(error);
   }

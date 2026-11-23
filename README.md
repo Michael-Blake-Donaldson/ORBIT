@@ -35,6 +35,15 @@ directory outside the synced tree.
 
 ### Run the browser workspace with queued missions
 
+In queued mode, use **Save displayed run** to keep a completed result beyond
+the temporary job lifetime. Open it from **Saved runs** to restore the plan and
+load its original telemetry. The run manifest records the outcome, elapsed
+time, row count, and SHA-256 hashes of the original plan and telemetry. The
+plan hash covers embedded ephemerides. Saved runs persist across controller
+restarts and are visible only to their owner. Delete a saved run to remove its
+server-side artifacts. The service allows eight saved runs per owner and
+reserves half of its job capacity for temporary jobs.
+
 Build the controller and start its private loopback service. Generate a
 unique `ORBIT_JOB_TOKEN` of at least 32 URL-safe characters, and supply the
 same token through the environment of both processes. Keep the token out

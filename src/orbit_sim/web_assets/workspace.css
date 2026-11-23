@@ -31,6 +31,8 @@ fieldset { margin: 0; border: 0; padding: 0; min-width: 0; }
 .form-section { border-top: 1px solid var(--border); padding: .9rem 1rem; }
 .helper { font-size: .875rem; color: var(--muted); }
 .form-section .helper { margin: .35rem 0; }
+#saved-run { width: 100%; margin-top: .5rem; }
+.saved-actions { flex-wrap: wrap; margin-top: .6rem; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; margin-top: .55rem; }
 .form-grid .wide { grid-column: 1 / -1; }
 label { font-size: .875rem; }
