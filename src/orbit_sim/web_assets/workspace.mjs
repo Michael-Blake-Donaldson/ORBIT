@@ -301,7 +301,7 @@ async function loadExample() {
 }
 
 async function runPlan() {
-  const body = JSON.stringify(authoredPlan());
+  const body = result?.revision === revision ? await result.originalPlan.text() : JSON.stringify(authoredPlan());
   status(useMissionJobs ? "Submitting mission…" : "Simulating mission…");
   try {
     const download = useMissionJobs ? await jobSession.run(body, showJobState) :

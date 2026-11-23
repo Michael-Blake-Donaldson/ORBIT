@@ -151,6 +151,12 @@ final class MissionHttpService implements AutoCloseable {
             fields += ",\"saved_at\":" + quote(job.savedAt().toString()) + ",\"plan_sha256\":" + quote(job.planDigest())
                     + ",\"telemetry_sha256\":" + quote(job.telemetryDigest());
         }
+        if (job.engine() != null) {
+            String[] engine = job.engine().split("\\|", -1);
+            fields += ",\"engine\":{\"orbit_version\":" + quote(engine[0]) + ",\"source_sha256\":" + quote(engine[1])
+                    + ",\"python_version\":" + quote(engine[2]) + ",\"numpy_version\":" + quote(engine[3])
+                    + ",\"scipy_version\":" + quote(engine[4]) + "}";
+        }
         return "{" + fields + "}";
     }
 

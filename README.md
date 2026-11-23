@@ -38,9 +38,11 @@ directory outside the synced tree.
 In queued mode, use **Save displayed run** to keep a completed result beyond
 the temporary job lifetime. Open it from **Saved runs** to restore the plan and
 load its original telemetry. The run manifest records the outcome, elapsed
-time, row count, and SHA-256 hashes of the original plan and telemetry. The
-plan hash covers embedded ephemerides. Saved runs persist across controller
-restarts and are visible only to their owner. Delete a saved run to remove its
+time, row count, and SHA-256 hashes of the original plan and telemetry. It
+also records the worker's ORBIT source fingerprint and ORBIT, Python, NumPy,
+and SciPy versions. The plan hash covers embedded ephemerides. Running an
+opened plan before editing it resubmits the original bytes. Saved runs persist
+across controller restarts and are visible only to their owner. Delete a saved run to remove its
 server-side artifacts. The service allows eight saved runs per owner and
 reserves half of its job capacity for temporary jobs.
 

@@ -178,6 +178,8 @@ class WorkspaceTests(unittest.TestCase):
                 status = self.wait_for_job(path)
                 self.assertEqual(status["state"], "complete", status)
                 self.assertEqual(status["rows"], 244)
+                self.assertRegex(status["engine"]["source_sha256"], r"^[a-f0-9]{64}$")
+                self.assertEqual(status["engine"]["python_version"], ".".join(map(str, sys.version_info[:3])))
                 response = self.request(f"{path}/telemetry")
                 self.assertEqual(response["status"], "200 OK", response["body"][:240])
                 csv_bytes = response["body"]
@@ -201,6 +203,7 @@ class WorkspaceTests(unittest.TestCase):
                 self.assertEqual(restored["status"], "202 Accepted", restored["body"])
                 self.assertEqual(json.loads(restored["body"])["id"], identifier)
                 self.assertEqual(json.loads(restored["body"])["state"], "complete")
+                self.assertEqual(json.loads(restored["body"])["engine"], status["engine"])
                 self.assertEqual(self.request(f"{path}/telemetry")["body"], csv_bytes)
 
     @unittest.skipUnless(
@@ -261,6 +264,9 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(response["status"], "200 OK", response["body"])
             receipt = json.loads(response["body"])
             self.assertEqual(receipt["plan_sha256"], sha256(plan).hexdigest())
+            telemetry = self.request(f"{first_path}/telemetry", **first_user)["body"]
+            self.assertEqual(receipt["telemetry_sha256"], sha256(telemetry).hexdigest())
+            self.assertIn("orbit_version", receipt["engine"])
             self.assertEqual(self.request(f"{first_path}/plan", **first_user)["body"], plan)
             self.assertEqual(json.loads(self.request("/api/saved-runs", **first_user)["body"]), [receipt])
             self.assertEqual(json.loads(self.request("/api/saved-runs", **spoofed)["body"]), [])

@@ -178,11 +178,11 @@ class MissionJobsTest {
         try (var store = new MissionJobStore(spool)) {
             store.create(running);
             store.save(new MissionJobStore.Entry(
-                    running, OWNER, FIRST, hash, MissionJobs.State.QUEUED, null, null, null, null));
+                    running, OWNER, FIRST, hash, MissionJobs.State.QUEUED, null, null, null, null, null));
             Files.write(store.telemetry(running), CSV);
             store.create(cancelling);
             store.save(new MissionJobStore.Entry(
-                    cancelling, OWNER, SECOND, hash, MissionJobs.State.CANCELLING, null, null, null, null));
+                    cancelling, OWNER, SECOND, hash, MissionJobs.State.CANCELLING, null, null, null, null, null));
             Path interruptedWork = Files.createTempDirectory(store.directory(cancelling), "work-");
             Files.write(interruptedWork.resolve("telemetry.csv"), CSV);
         }

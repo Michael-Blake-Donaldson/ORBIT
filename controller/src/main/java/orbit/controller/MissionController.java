@@ -2,6 +2,7 @@ package orbit.controller;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -30,6 +31,8 @@ public final class MissionController {
     private static final Set<String> TELEMETRY_KINDS = Set.of(
             "sample", "pre_burn", "post_burn", "burn_start", "burn_end", "periapsis", "apoapsis", "complete", "impact");
     private static final Pattern DECIMAL = Pattern.compile("[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?");
+    private static final String VERSION = "[A-Za-z0-9._+-]{1,40}";
+    private static final Pattern ENGINE = Pattern.compile(VERSION + "\\|[a-f0-9]{64}(?:\\|" + VERSION + "){3}");
     private static final Pattern TERMINAL_CONTROLS = Pattern.compile("[\\p{Cc}\\p{Cf}]");
 
     private MissionController() {}
@@ -108,8 +111,10 @@ public final class MissionController {
 
     static Receipt simulate(Path python, Path plan, Path telemetry, int timeout, int maxRows, int maxBytes,
                             ProcessBuilder.Redirect diagnostics) throws IOException, InterruptedException {
+        Path report = telemetry.resolveSibling("engine.txt");
         ProcessBuilder command = new ProcessBuilder(
-                python.toString(), "-I", "-X", "utf8", "-m", "orbit_sim", "--max-rows", Integer.toString(maxRows), "--",
+                python.toString(), "-I", "-X", "utf8", "-m", "orbit_sim", "--max-rows", Integer.toString(maxRows),
+                "--engine-report", report.toString(), "--",
                 plan.toString(), telemetry.toString())
                 .directory(telemetry.getParent().toFile())
                 .redirectOutput(ProcessBuilder.Redirect.DISCARD)
@@ -133,7 +138,23 @@ public final class MissionController {
                 terminate(worker);
             }
         }
-        return readReceipt(telemetry, maxRows, maxBytes);
+        Receipt receipt = readReceipt(telemetry, maxRows, maxBytes);
+        String engine;
+        try (var input = Files.newInputStream(report, LinkOption.NOFOLLOW_LINKS)) {
+            byte[] bytes = input.readNBytes(230);
+            if (bytes.length == 230) {
+                throw new IOException("simulation engine report exceeds its size limit");
+            }
+            engine = new String(bytes, StandardCharsets.US_ASCII).strip();
+        }
+        if (!validEngineReport(engine)) {
+            throw new IOException("invalid simulation engine report");
+        }
+        return new Receipt(receipt.outcome(), receipt.elapsedSeconds(), receipt.rows(), engine);
+    }
+
+    static boolean validEngineReport(String engine) {
+        return ENGINE.matcher(engine).matches();
     }
 
     private static void terminate(Process worker) throws InterruptedException {
@@ -207,7 +228,11 @@ public final class MissionController {
         System.err.println("ORBIT controller: " + safe);
     }
 
-    record Receipt(String outcome, double elapsedSeconds, int rows) {}
+    record Receipt(String outcome, double elapsedSeconds, int rows, String engine) {
+        Receipt(String outcome, double elapsedSeconds, int rows) {
+            this(outcome, elapsedSeconds, rows, null);
+        }
+    }
 
     static final class WorkerFailure extends IOException {
         private final int status;

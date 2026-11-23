@@ -180,12 +180,15 @@ class JobClient:
             if response.getheader("Transfer-Encoding") is not None or re.fullmatch(r"[0-9]{1,8}", length) is None:
                 return _error("502 Bad Gateway", "The mission job service returned an invalid response.")
             size = int(length)
-            if status == 200 and path.endswith("/telemetry") and content_type == "text/csv":
-                if size <= _MAX_CSV_BYTES and len(result := response.read(size)) == size:
-                    return "200 OK", "text/csv; charset=utf-8", result
-            elif (
+            if (
+                status == 200 and path.endswith("/telemetry") and content_type == "text/csv"
+                and size <= _MAX_CSV_BYTES and len(result := response.read(size)) == size
+            ):
+                return "200 OK", "text/csv; charset=utf-8", result
+            json_limit = _MAX_PLAN_BYTES if path.endswith("/plan") else 8192 if path == "/saved-runs" else 4096
+            if (
                 content_type == "application/json" and status in (200, 202, *_JOB_ERRORS)
-                and size <= (_MAX_PLAN_BYTES if status == 200 and path.endswith("/plan") else 4096)
+                and size <= (json_limit if status == 200 else 4096)
                 and len(result := response.read(size)) == size
             ):
                 reason = {200: "OK", 202: "Accepted", **_JOB_ERRORS}[status]

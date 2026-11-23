@@ -33,7 +33,7 @@ final class MissionJobStore implements AutoCloseable {
     private final FileLock lock;
 
     record Entry(UUID id, String owner, String key, byte[] digest, MissionJobs.State state,
-                 Instant expires, String failure, byte[] telemetryDigest, Instant savedAt) {}
+                 Instant expires, String failure, byte[] telemetryDigest, Instant savedAt, String engine) {}
 
     MissionJobStore(Path spool) throws IOException {
         Path parent = spool.toRealPath();
@@ -125,6 +125,9 @@ final class MissionJobStore implements AutoCloseable {
         if (entry.savedAt() != null) {
             values.setProperty("saved_at", entry.savedAt().toString());
         }
+        if (entry.engine() != null) {
+            values.setProperty("engine", entry.engine());
+        }
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         values.store(bytes, null);
         Path job = directory(entry.id());
@@ -193,16 +196,18 @@ final class MissionJobStore implements AutoCloseable {
             byte[] telemetryDigest = telemetry == null ? null : HexFormat.of().parseHex(telemetry);
             String saved = values.getProperty("saved_at");
             Instant savedAt = saved == null ? null : Instant.parse(saved);
+            String engine = values.getProperty("engine");
             if ((!schema.equals("1") && !schema.equals("2")) || !MissionJobs.validOwner(owner)
                     || !MissionJobs.validKey(key) || digest.length != 32
                     || state.terminal() != (expires != null) || (state == MissionJobs.State.FAILED) != (failure != null)
                     || (failure != null && failure.length() > 240)
                     || (schema.equals("2") && (state == MissionJobs.State.COMPLETE) != (telemetryDigest != null))
                     || (telemetryDigest != null && telemetryDigest.length != 32)
-                    || (savedAt != null && state != MissionJobs.State.COMPLETE)) {
+                    || (savedAt != null && state != MissionJobs.State.COMPLETE)
+                    || (engine != null && (state != MissionJobs.State.COMPLETE || !MissionController.validEngineReport(engine)))) {
                 throw new IOException("Invalid job checkpoint fields.");
             }
-            return new Entry(id, owner, key, digest, state, expires, failure, telemetryDigest, savedAt);
+            return new Entry(id, owner, key, digest, state, expires, failure, telemetryDigest, savedAt, engine);
         } catch (IllegalArgumentException | java.time.DateTimeException e) {
             throw new IOException("Invalid job checkpoint values.", e);
         }

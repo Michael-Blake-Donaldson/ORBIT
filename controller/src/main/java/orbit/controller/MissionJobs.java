@@ -41,7 +41,7 @@ final class MissionJobs implements AutoCloseable {
     }
 
     record Snapshot(UUID id, State state, MissionController.Receipt receipt, String failure,
-                    Instant savedAt, String planDigest, String telemetryDigest) {}
+                    Instant savedAt, String planDigest, String telemetryDigest, String engine) {}
 
     private record OwnerKey(String owner, String key) {}
 
@@ -104,6 +104,7 @@ final class MissionJobs implements AutoCloseable {
             job.failure = record.failure();
             job.telemetryDigest = record.telemetryDigest();
             job.savedAt = record.savedAt();
+            job.engine = record.engine();
             if (job.state == State.COMPLETE) {
                 try {
                     if (job.telemetryDigest != null) {
@@ -384,6 +385,7 @@ final class MissionJobs implements AutoCloseable {
         private String failure;
         private byte[] telemetryDigest;
         private Instant savedAt;
+        private String engine;
 
         Job(UUID id, OwnerKey key, byte[] hash, byte[] body) {
             this.id = id;
@@ -395,7 +397,8 @@ final class MissionJobs implements AutoCloseable {
         Snapshot snapshot() {
             return new Snapshot(id, state, receipt, failure, savedAt,
                     savedAt == null ? null : HexFormat.of().formatHex(hash),
-                    savedAt == null ? null : HexFormat.of().formatHex(telemetryDigest));
+                    savedAt == null ? null : HexFormat.of().formatHex(telemetryDigest),
+                    state == State.COMPLETE ? engine : null);
         }
 
         boolean isExpired(Instant now) {
@@ -407,12 +410,14 @@ final class MissionJobs implements AutoCloseable {
         }
 
         void persist(State next, Instant expiration, String message, byte[] artifact, Instant saved) throws IOException {
-            store.save(new MissionJobStore.Entry(id, key.owner(), key.key(), hash, next, expiration, message, artifact, saved));
+            store.save(new MissionJobStore.Entry(id, key.owner(), key.key(), hash, next, expiration, message, artifact,
+                    saved, next == State.COMPLETE ? engine : null));
         }
 
         void finish(State terminal, MissionController.Receipt result, String message) throws IOException {
             Instant expiration = clock.instant().plus(retention);
             byte[] artifact = terminal == State.COMPLETE ? digest(store.readTelemetry(id)) : null;
+            engine = result == null ? null : result.engine();
             persist(terminal, expiration, message, artifact, terminal == State.COMPLETE ? savedAt : null);
             state = terminal;
             thread = null;
