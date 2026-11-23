@@ -29,6 +29,7 @@ def main(argv: list[str] | None = None) -> int:
         reference, candidate = load_mission(args.reference), load_mission(args.candidate)
         count = 0
         peak = end = 0.0
+        ended_at_impact = False
         with atomic_text_output(args.output) as file:
             writer = csv.writer(file, lineterminator="\n")
             writer.writerow(_HEADER)
@@ -42,10 +43,13 @@ def main(argv: list[str] | None = None) -> int:
                 count += 1
                 peak = max(peak, difference)
                 end = row.time_s
+                ended_at_impact = "impact" in (row.reference_kind, row.candidate_kind)
     except (OSError, ValueError, SimulationError) as exc:
         print(f"ORBIT comparison error: {str(exc)[:320]!r}", file=sys.stderr)
         return 1
     print(f"Compared {count} states through {end:g} s. Peak sampled separation: {peak:.6g} km.")
+    if end < reference.duration_s or ended_at_impact:
+        print(f"Surface impact limited the comparison to the shared samples. The planned end was {reference.duration_s:g} s.")
     return 0
 
 

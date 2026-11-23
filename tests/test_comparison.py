@@ -1,4 +1,5 @@
 import csv
+import json
 import math
 import subprocess
 import sys
@@ -68,6 +69,27 @@ class ComparisonTests(unittest.TestCase):
             list(compare_trajectories(mission, replace(mission, duration_s=101)))
         with self.assertRaisesRegex(ValueError, "epochs"):
             list(compare_trajectories(mission, replace(mission, epoch_jd_tdb=2460676.6)))
+
+    def test_cli_reports_a_comparison_cut_short_by_impact(self):
+        with tempfile.TemporaryDirectory(prefix="orbit compare impact ") as directory:
+            root = Path(directory)
+            reference, candidate, output = (root / name for name in ("reference.json", "candidate.json", "delta.csv"))
+            plan = {"schema_version": 1, "duration_s": 100, "sample_interval_s": 5}
+            reference.write_text(json.dumps(plan | {
+                "initial_state": {"position_km": [6400, 0, 0], "velocity_km_s": [-1, 0, 0]},
+            }), encoding="utf-8")
+            candidate.write_text(json.dumps(plan | {
+                "initial_state": {"position_km": [7000, 0, 0], "velocity_km_s": [0, 7.5, 0]},
+            }), encoding="utf-8")
+            command = [
+                sys.executable, "-I", "-m", "orbit_sim.compare", str(reference), str(candidate), str(output),
+            ]
+            result = subprocess.run(command, check=False, capture_output=True, text=True, cwd=root, timeout=15)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Compared 4 states through 15 s", result.stdout)
+            self.assertIn("Surface impact limited the comparison", result.stdout)
+            self.assertIn("planned end was 100 s", result.stdout)
+            self.assertTrue(output.is_file())
 
     def test_lunar_csv_matches_known_peak_and_final_state_differences(self):
         reference = EXAMPLES / "lunar_baseline.json"

@@ -286,6 +286,7 @@ are inertial velocities resolved in those axes. The comparison uses the
 state after all maneuvers at a shared timestamp and reports samples
 through the common portion of both trajectories. [NASA orbit-frame reference](https://ntrs.nasa.gov/api/citations/20240004259/downloads/GEONSMS_R3_0_NASA-TP-20240004259.pdf)
 
+The command reports when a surface impact limits comparison coverage.
 Use `--interval-s` to change the cadence. By default it uses the coarser
 input cadence. The one-day lunar comparison peaks at about 13.20 km
 sampled separation and ends at about 12.14 km.
