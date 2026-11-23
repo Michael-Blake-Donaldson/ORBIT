@@ -33,6 +33,15 @@ fieldset { margin: 0; border: 0; padding: 0; min-width: 0; }
 .form-section .helper { margin: .35rem 0; }
 #saved-run { width: 100%; margin-top: .5rem; }
 .saved-actions { flex-wrap: wrap; margin-top: .6rem; }
+.comparison-panel { padding: .85rem 1rem; }
+.comparison-panel summary { cursor: pointer; }
+.comparison-panel summary h3 { display: inline; }
+.comparison-panel[open] summary { margin-bottom: .55rem; }
+.comparison-actions { flex-wrap: wrap; margin-block: .65rem; }
+.comparison-panel .comparison-metrics { margin-block: .75rem; }
+.comparison-panel #comparison-chart { display: block; width: 100%; height: clamp(12rem, 27vw, 17rem); }
+#comparison-index { width: 100%; }
+.comparison-metric { display: inline-block; margin-top: .6rem; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; margin-top: .55rem; }
 .form-grid .wide { grid-column: 1 / -1; }
 label { font-size: .875rem; }

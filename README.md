@@ -285,6 +285,16 @@ efficiencies for the battery.
 
 ## Compare two trajectories
 
+In the queued browser workspace, run and save two missions and open **Compare
+saved runs**. Select **Baseline** and **Candidate**, then run the comparison.
+Use the chart and sample slider to inspect position or velocity differences.
+The CSV includes both saved run IDs, original plan fingerprints, cadence, and
+engine versions. Comparison uses the current engine to propagate both original
+plans. The workspace flags a difference from an original engine fingerprint.
+Reports can be exported from the displayed comparison. An impact can shorten
+its coverage. The controller admits one comparison at a time and caps reports
+at 4,000 rows. The lunar example pair is available in the mission menu.
+
 ```powershell
 uv run --locked python -m orbit_sim.compare examples/lunar_baseline.json examples/lunar_perturbation.json output/lunar-comparison.csv
 ```

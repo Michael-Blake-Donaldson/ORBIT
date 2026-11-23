@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {comparisonCsv, engineMatches, parseComparison} from "../src/orbit_sim/web_assets/comparison.mjs";
 import {JobSession} from "../src/orbit_sim/web_assets/jobs.mjs";
 import {elapsed, nearestSample, parseTelemetry} from "../src/orbit_sim/web_assets/mission.mjs";
 
@@ -45,6 +46,32 @@ test("elapsed time labels retain milliseconds and can exceed a day", () => {
 
 const id = "01234567-1234-1234-1234-0123456789ab";
 const snapshot = (state) => ({json: async () => ({id, state})});
+
+test("comparison verifies the selected runs and exports cadence and both engines", () => {
+  const candidateId = "01234567-1234-1234-1234-0123456789ac";
+  const engine = {orbit_version: "0.1.0", source_sha256: "a".repeat(64), python_version: "3.12.0",
+    numpy_version: "2.2.0", scipy_version: "1.15.0"};
+  const columns = "time_s,reference_kind,candidate_kind,position_difference_km,velocity_difference_km_s," +
+    "delta_x_km,delta_y_km,delta_z_km,delta_vx_km_s,delta_vy_km_s,delta_vz_km_s," +
+    "delta_r_km,delta_t_km,delta_n_km,delta_vr_km_s,delta_vt_km_s,delta_vn_km_s";
+  const csv = columns + "\n0,sample,sample,0,0,0,0,0,0,0,0,,,,,,\n" +
+    "5,sample,sample,0.5,0.2,0.5,0,0,0.2,0,0,,,,,,\n";
+  const raw = {
+    baseline: {id, plan_sha256: "b".repeat(64), engine},
+    candidate: {id: candidateId, plan_sha256: "c".repeat(64), engine: {...engine, orbit_version: "0.0.9"}},
+    report: {csv, rows: 2, interval_s: 5, duration_s: 10, impact_limited: true, engine},
+  };
+  const comparison = parseComparison(raw, id, candidateId);
+  assert.equal(comparison.rows.at(-1).positionDifference, 0.5);
+  assert.equal(engineMatches(comparison.candidate, engine), false);
+  const exported = comparisonCsv(comparison);
+  assert.match(exported, /baseline_run_id,candidate_run_id/);
+  assert.match(exported, /comparison_interval_s,impact_limited,comparison_orbit_version/);
+  assert.match(exported, /"5","true","0.1.0"/);
+  assert.match(exported, /"0.0.9"/);
+  assert.throws(() => parseComparison(raw, candidateId, id), /metadata/);
+  assert.throws(() => parseComparison({...raw, report: {...raw.report, impact_limited: false}}, id, candidateId), /timeline/);
+});
 
 test("retrying an ambiguous submission reuses its key until the result is accepted", async () => {
   const keys = [];

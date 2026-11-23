@@ -1,4 +1,5 @@
 import {JobSession, jobIsActive} from "./jobs.mjs";
+import {comparisonCsv, engineMatches, parseComparison} from "./comparison.mjs";
 import {cartesian, elapsed, events, keplerian, measure, parseTelemetry, propellant} from "./mission.mjs";
 import {drawOrbit, drawTelemetry, sampleAtPointer} from "./plots.mjs";
 
@@ -13,6 +14,10 @@ const trajectory = byId("trajectory");
 const telemetry = byId("telemetry");
 const slider = byId("sample-index");
 const savedMenu = byId("saved-run");
+const baselineMenu = byId("comparison-baseline");
+const candidateMenu = byId("comparison-candidate");
+const comparisonChart = byId("comparison-chart");
+const comparisonIndex = byId("comparison-index");
 let plan;
 let filename = "mission";
 let result;
@@ -25,6 +30,7 @@ let orbitDrafts;
 let useMissionJobs = false;
 let activeJob;
 let cancelPending = false;
+let comparison;
 
 const jobStates = {
   queued: "Mission queued…",
@@ -237,6 +243,9 @@ function controls() {
   byId("refresh-saved").disabled = busy;
   byId("save-result").disabled = busy || !result?.receipt || Boolean(result.receipt.saved_at);
   byId("saved-exports").hidden = !result?.receipt?.saved_at;
+  for (const menu of [baselineMenu, candidateMenu]) menu.disabled = busy || menu.options.length < 3;
+  byId("run-comparison").disabled = busy || !baselineMenu.value || !candidateMenu.value || baselineMenu.value === candidateMenu.value;
+  byId("export-comparison").disabled = busy || !comparison;
 }
 
 function edited() {
@@ -356,13 +365,75 @@ function download(blob, name) {
 async function refreshSavedRuns(selected = savedMenu.value) {
   const response = await request("/api/saved-runs");
   const runs = await response.json();
-  savedMenu.replaceChildren(new Option(runs.length ? "Select a run" : "No saved runs", ""));
-  for (const run of runs) {
-    const date = new Date(run.saved_at).toLocaleString();
-    savedMenu.append(new Option(`${date} · ${events[run.outcome]} · ${run.id.slice(0, 8)}`, run.id));
+  for (const menu of [savedMenu, baselineMenu, candidateMenu]) {
+    const previous = menu === savedMenu ? selected : menu.value;
+    menu.replaceChildren(new Option(runs.length ? "Select a run" : "No saved runs", ""));
+    for (const run of runs) {
+      const date = new Date(run.saved_at).toLocaleString();
+      menu.append(new Option(`${date} · ${events[run.outcome]} · ${run.id.slice(0, 8)}`, run.id));
+    }
+    menu.value = runs.some((run) => run.id === previous) ? previous : "";
   }
-  savedMenu.value = runs.some((run) => run.id === selected) ? selected : "";
+  if (comparison && (!baselineMenu.value || !candidateMenu.value)) {
+    clearComparison();
+  }
   controls();
+}
+
+function comparisonStatus(message) {
+  byId("comparison-status").textContent = message;
+}
+
+function clearComparison() {
+  comparison = null;
+  byId("comparison-result").hidden = true;
+  comparisonStatus("");
+  controls();
+}
+
+async function runComparison() {
+  const baseline = baselineMenu.value;
+  const candidate = candidateMenu.value;
+  if (!baseline || !candidate || baseline === candidate) return;
+  clearComparison();
+  comparisonStatus("Comparing saved runs…");
+  try {
+    const response = await request(`/api/comparisons/${baseline}/${candidate}`, undefined, "POST");
+    comparison = parseComparison(await response.json(), baseline, candidate);
+    showComparison();
+    comparisonStatus(`${comparison.rows.length.toLocaleString("en-US")} shared samples`);
+  } catch (error) {
+    comparisonStatus(error.message);
+  }
+}
+
+function showComparison() {
+  const {baseline, candidate, report, rows} = comparison;
+  const final = rows.at(-1);
+  byId("peak-position").textContent = measure(Math.max(...rows.map(row => row.positionDifference)), "km");
+  byId("final-position-difference").textContent = measure(final.positionDifference, "km");
+  byId("peak-velocity").textContent = measure(Math.max(...rows.map(row => row.velocityDifference)), "km/s", 5);
+  byId("final-velocity-difference").textContent = measure(final.velocityDifference, "km/s", 5);
+  const prefix = report.impact_limited ? "Coverage limited by surface impact. " : "";
+  byId("comparison-coverage").textContent = `${prefix}T+${elapsed(final.time)} of ${elapsed(report.duration_s)} · ` +
+    `${measure(report.interval_s, "s", 3)} cadence`;
+  const different = [["baseline", baseline], ["candidate", candidate]]
+    .filter(([, run]) => !engineMatches(run, report.engine)).map(([side]) => side);
+  const engine = `ORBIT ${report.engine.orbit_version} · ${report.engine.source_sha256.slice(0, 12)}`;
+  const note = different.length ? ` · Build differs or is unavailable for the ${different.join(" and ")}.` : "";
+  byId("comparison-engine").textContent = engine + note;
+  comparisonIndex.max = rows.length - 1;
+  comparisonIndex.value = rows.length - 1;
+  comparisonIndex.disabled = rows.length < 2;
+  byId("comparison-result").hidden = false;
+  inspectComparison();
+}
+
+function inspectComparison() {
+  const row = comparison.rows[comparisonIndex.valueAsNumber];
+  byId("comparison-sample").textContent = `T+${elapsed(row.time)} · ${measure(row.positionDifference, "km", 3)} · ` +
+    `${measure(row.velocityDifference, "km/s", 5)}`;
+  redraw();
 }
 
 async function openSavedRun(id) {
@@ -437,6 +508,9 @@ function redraw() {
     framePending = false;
     drawOrbit(trajectory, result?.rows ?? [], selected, byId("plane").value);
     drawTelemetry(telemetry, result?.rows ?? [], selected, byId("series").value);
+    if (comparison && byId("comparison-panel").open) {
+      drawTelemetry(comparisonChart, comparison.rows, comparisonIndex.valueAsNumber, byId("comparison-series").value);
+    }
   });
 }
 
@@ -497,6 +571,23 @@ byId("save-plan").addEventListener("click", () => {
 byId("download").addEventListener("click", () => download(result.csv, `${result.filename}-telemetry.csv`));
 slider.addEventListener("input", () => inspect(slider.valueAsNumber));
 savedMenu.addEventListener("change", controls);
+baselineMenu.addEventListener("change", clearComparison);
+candidateMenu.addEventListener("change", clearComparison);
+byId("run-comparison").addEventListener("click", () => operate(runComparison, ""));
+byId("export-comparison").addEventListener("click", () => {
+  if (!comparison) return;
+  const name = `comparison-${comparison.baseline.id.slice(0, 8)}-${comparison.candidate.id.slice(0, 8)}.csv`;
+  download(new Blob([comparisonCsv(comparison)], {type: "text/csv"}), name);
+});
+byId("comparison-series").addEventListener("change", redraw);
+byId("comparison-panel").addEventListener("toggle", redraw);
+comparisonIndex.addEventListener("input", inspectComparison);
+comparisonChart.addEventListener("pointerdown", (event) => {
+  if (comparison) {
+    comparisonIndex.value = sampleAtPointer(comparisonChart, comparison.rows, event.clientX);
+    inspectComparison();
+  }
+});
 byId("refresh-saved").addEventListener("click", () => operate(refreshSavedRuns, "Loading saved runs…"));
 byId("open-saved").addEventListener("click", () => operate(() => openSavedRun(savedMenu.value), "Opening saved run…"));
 byId("save-result").addEventListener("click", () => operate(async () => {
@@ -533,6 +624,7 @@ telemetry.addEventListener("pointerdown", (event) => {
 const resize = new ResizeObserver(redraw);
 resize.observe(trajectory);
 resize.observe(telemetry);
+resize.observe(comparisonChart);
 
 async function initialize() {
   controls();
@@ -540,6 +632,7 @@ async function initialize() {
     const capabilities = await request("/api/capabilities");
     useMissionJobs = (await capabilities.json()).mission_jobs === true;
     byId("saved-runs").hidden = !useMissionJobs;
+    byId("comparison-panel").hidden = !useMissionJobs;
     await loadExample();
     if (useMissionJobs) await refreshSavedRuns();
   } catch (error) {

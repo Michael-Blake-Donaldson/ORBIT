@@ -273,6 +273,7 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(json.loads(self.request("/api/saved-runs", **spoofed)["body"]), [])
             self.assertEqual(self.request(f"{first_path}/plan", **spoofed)["status"], "404 Not Found")
             self.assertEqual(self.request(saved_path, REQUEST_METHOD="DELETE", **spoofed)["status"], "404 Not Found")
+            self.assertEqual(self.request(f"{second_path}/saved", REQUEST_METHOD="PUT", **second_user)["status"], "200 OK")
             first_id, second_id = first_path.rsplit("/", 1)[1], second_path.rsplit("/", 1)[1]
             compare = f"/api/comparisons/{first_id}/{second_id}"
             self.assertEqual(self.request(compare, REQUEST_METHOD="POST", **missing_origin)["status"], "403 Forbidden")
@@ -306,6 +307,13 @@ class WorkspaceTests(unittest.TestCase):
                 bad = self.request(f"/api/comparisons/{baseline}/{mismatched}", REQUEST_METHOD="POST")
                 self.assertEqual(bad["status"], "422 Unprocessable Content")
                 self.assertIn("equal mission durations", json.loads(bad["body"])["message"])
+
+                other_epoch = json.loads((_EXAMPLES / "lunar_baseline.json").read_bytes())
+                other_epoch["epoch_jd_tdb"] += 1
+                shifted = self.save_run(json.dumps(other_epoch).encode())
+                bad = self.request(f"/api/comparisons/{baseline}/{shifted}", REQUEST_METHOD="POST")
+                self.assertEqual(bad["status"], "422 Unprocessable Content")
+                self.assertIn("matching mission epochs", json.loads(bad["body"])["message"])
 
                 short = {"schema_version": 1, "duration_s": 100, "sample_interval_s": 5}
                 stable = self.save_run(json.dumps(short | {

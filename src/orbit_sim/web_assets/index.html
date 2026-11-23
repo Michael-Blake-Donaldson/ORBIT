@@ -13,6 +13,7 @@
     <div class="brand"><span class="orbit-mark" aria-hidden="true"></span><strong>ORBIT</strong><span class="divider"></span><span>Mission workspace</span></div>
     <div class="top-tools"><label for="example" class="sr-only">Example mission</label><select id="example">
       <option value="hohmann">Hohmann transfer</option><option value="finite-burn">Finite prograde burn</option><option value="j2-precession">J₂ nodal regression</option>
+      <option value="lunar-baseline">Lunar baseline</option><option value="lunar-perturbation">Lunar perturbation</option>
     </select><label class="button secondary file-picker">Import plan<input id="upload" type="file" accept=".json,application/json"></label></div>
   </header>
   <main class="workspace">
@@ -73,6 +74,31 @@
         <div class="metric"><span>Final mass</span><strong id="final-mass">—</strong></div>
         <div class="metric"><span>Telemetry rows</span><strong id="row-count">—</strong></div>
       </div>
+      <details class="panel plot-panel comparison-panel" id="comparison-panel" hidden>
+        <summary><h3>Compare saved runs</h3></summary>
+        <p class="helper">Candidate minus baseline on a shared time grid. Save two completed runs to compare them.</p>
+        <div class="form-grid">
+          <label>Baseline<select id="comparison-baseline"><option value="">Select a run</option></select></label>
+          <label>Candidate<select id="comparison-candidate"><option value="">Select a run</option></select></label>
+        </div>
+        <div class="button-row comparison-actions"><button class="button primary" id="run-comparison" type="button" disabled>Run comparison</button><button class="button secondary" id="export-comparison" type="button" disabled>Export comparison CSV</button></div>
+        <p id="comparison-status" class="helper" role="status"></p>
+        <div id="comparison-result" hidden>
+          <div class="metrics comparison-metrics" aria-label="Comparison summary">
+            <div class="metric"><span>Peak position difference</span><strong id="peak-position"></strong></div>
+            <div class="metric"><span>Final position difference</span><strong id="final-position-difference"></strong></div>
+            <div class="metric"><span>Peak velocity difference</span><strong id="peak-velocity"></strong></div>
+            <div class="metric"><span>Final velocity difference</span><strong id="final-velocity-difference"></strong></div>
+          </div>
+          <p class="helper" id="comparison-coverage"></p>
+          <p class="helper" id="comparison-engine"></p>
+          <label class="comparison-metric">Comparison metric <select id="comparison-series"><option value="positionDifference">Position difference (km)</option><option value="velocityDifference">Velocity difference (km/s)</option></select></label>
+          <canvas id="comparison-chart" aria-label="Separation between baseline and candidate over time"></canvas>
+          <label class="sr-only" for="comparison-index">Inspect comparison sample</label>
+          <input type="range" id="comparison-index" min="0" max="1" value="0">
+          <p class="helper" id="comparison-sample"></p>
+        </div>
+      </details>
       <section class="panel plot-panel" aria-labelledby="trajectory-title">
         <div class="section-title"><div><h3 id="trajectory-title">Trajectory</h3><p class="helper">Earth-centered inertial projection · km</p></div><label class="sr-only" for="plane">Projection plane</label><select id="plane"><option>XY</option><option>XZ</option><option>YZ</option></select></div>
         <canvas id="trajectory" aria-label="Orbit and selected spacecraft position in the chosen plane"></canvas>
