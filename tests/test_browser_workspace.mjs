@@ -51,18 +51,51 @@ test("retrying an ambiguous submission reuses its key until the result is accept
   let sequence = 0;
   const csv = {csv: true};
   const session = new JobSession(async (path, body, method, key) => {
-    if (method !== "POST") return csv;
+    if (method !== "POST") return {blob: async () => csv};
     keys.push(key);
     if (keys.length < 3) throw new TypeError("lost response");
     return snapshot("complete");
   }, () => `key-${++sequence}`);
 
   await assert.rejects(session.run("same-plan", () => {}), /lost response/);
-  assert.equal(await session.run("same-plan", () => {}), csv);
+  assert.equal((await session.run("same-plan", () => {})).csv, csv);
   assert.deepEqual(keys, ["key-1", "key-1", "key-1"]);
   session.acknowledgeResult();
-  assert.equal(await session.run("same-plan", () => {}), csv);
+  assert.equal((await session.run("same-plan", () => {})).csv, csv);
   assert.equal(keys.at(-1), "key-2");
+});
+
+test("retrying a response body resumes the same completed job", async () => {
+  const keys = [];
+  let downloads = 0;
+  const csv = new Blob([header + "\n" + row(0, "sample") + row(1, "complete")]);
+  const receipt = {id, state: "complete", elapsed_s: 1, outcome: "complete", rows: 2};
+  const session = new JobSession(async (path, body, method, key) => {
+    if (method === "POST") {
+      keys.push(key);
+      return {json: async () => {
+        if (keys.length === 1) throw new SyntaxError("incomplete JSON");
+        return receipt;
+      }};
+    }
+    assert.equal(path, `/api/jobs/${id}/telemetry`);
+    return {blob: async () => {
+      if (++downloads === 1) throw new TypeError("download interrupted");
+      return csv;
+    }};
+  }, () => "original-key");
+  assert.deepEqual(await session.run("plan", () => {}), {csv, receipt});
+  assert.deepEqual(keys, ["original-key", "original-key"]);
+  assert.equal(downloads, 2);
+});
+
+test("telemetry must match the completed job receipt", () => {
+  const csv = header + "\n" + row(0, "sample") + row(1, "complete");
+  const receipt = {elapsed_s: 1, outcome: "complete", rows: 2};
+  assert.equal(parseTelemetry(csv, receipt).length, 2);
+  for (const change of [{rows: 3}, {elapsed_s: 2}, {outcome: "impact"}]) {
+    assert.throws(() => parseTelemetry(csv, {...receipt, ...change}), /completed job/);
+  }
 });
 
 test("status retry resumes the known job instead of resubmitting the plan", async () => {

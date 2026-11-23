@@ -298,13 +298,14 @@ async function runPlan() {
   const body = JSON.stringify(authoredPlan());
   status(useMissionJobs ? "Submitting mission…" : "Simulating mission…");
   try {
-    const response = useMissionJobs ? await jobSession.run(body, showJobState) : await request("/api/run", body);
-    if (response === null) {
+    const download = useMissionJobs ? await jobSession.run(body, showJobState) :
+      {csv: await (await request("/api/run", body)).blob()};
+    if (download === null) {
       status("Simulation cancelled.");
       return;
     }
-    const csv = await response.blob();
-    const rows = parseTelemetry(await csv.text());
+    const {csv, receipt} = download;
+    const rows = parseTelemetry(await csv.text(), receipt);
     jobSession.acknowledgeResult();
     result = {csv, rows, revision, filename};
     showResult();
@@ -318,6 +319,7 @@ async function runPlan() {
 function showJobState(snapshot) {
   activeJob = snapshot;
   if (jobIsActive(snapshot.state)) status(jobStates[snapshot.state]);
+  else if (snapshot.state === "complete") status("Downloading telemetry…");
   controls();
 }
 

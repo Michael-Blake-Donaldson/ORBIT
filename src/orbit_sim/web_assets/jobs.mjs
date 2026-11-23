@@ -6,7 +6,8 @@ export function jobIsActive(state) {
 }
 
 function retryable(error) {
-  return error instanceof TypeError || error.name === "TimeoutError" || error.status === 502;
+  return error instanceof TypeError || error instanceof SyntaxError || error.name === "TimeoutError" ||
+    error.status === 502;
 }
 
 async function retryOnce(send) {
@@ -42,8 +43,8 @@ export class JobSession {
     this.#running = true;
     try {
       if (!attempt.snapshot) {
-        const response = await retryOnce(() => this.#request("/api/jobs", body, "POST", attempt.key));
-        this.#observe(attempt, await response.json());
+        const snapshot = await retryOnce(async () => (await this.#request("/api/jobs", body, "POST", attempt.key)).json());
+        this.#observe(attempt, snapshot);
       }
       const path = `/api/jobs/${attempt.snapshot.id}`;
       const deadline = performance.now() + 120_000;
@@ -53,11 +54,12 @@ export class JobSession {
         if (!jobIsActive(state)) break;
         if (performance.now() >= deadline) throw new Error("Stopped waiting for this job. Retry to resume monitoring.");
         await this.#wait();
-        const response = await retryOnce(() => this.#request(path));
-        this.#observe(attempt, await response.json());
+        const snapshot = await retryOnce(async () => (await this.#request(path)).json());
+        this.#observe(attempt, snapshot);
       }
       if (attempt.snapshot.state === "complete") {
-        return await retryOnce(() => this.#request(`${path}/telemetry`));
+        const csv = await retryOnce(async () => (await this.#request(`${path}/telemetry`)).blob());
+        return {csv, receipt: attempt.snapshot};
       }
       this.#attempt = null;
       if (attempt.snapshot.state === "cancelled") return null;
@@ -74,8 +76,7 @@ export class JobSession {
     const attempt = this.#attempt;
     if (!this.#running || !jobIsActive(attempt?.snapshot?.state)) return;
     const path = `/api/jobs/${attempt.snapshot.id}`;
-    const response = await retryOnce(() => this.#request(path, undefined, "DELETE"));
-    const snapshot = await response.json();
+    const snapshot = await retryOnce(async () => (await this.#request(path, undefined, "DELETE")).json());
     if (this.#running && this.#attempt === attempt) {
       this.#observe(attempt, snapshot);
       onState(attempt.snapshot);
@@ -88,7 +89,8 @@ export class JobSession {
 
   #observe(attempt, snapshot) {
     if (!snapshot || typeof snapshot.id !== "string" || !jobId.test(snapshot.id)
-        || !Object.hasOwn(rank, snapshot.state) || (attempt.snapshot && snapshot.id !== attempt.snapshot.id)) {
+        || typeof snapshot.state !== "string" || !Object.hasOwn(rank, snapshot.state)
+        || (attempt.snapshot && snapshot.id !== attempt.snapshot.id)) {
       throw new Error("The job service returned an invalid status.");
     }
     // A poll started before DELETE can arrive after the cancellation response.

@@ -26,7 +26,7 @@ export const metrics = {
 const decimal = /^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/;
 const optionalColumns = new Set([11, 12, 14, 15, 16, 17]);
 
-export function parseTelemetry(csv) {
+export function parseTelemetry(csv, receipt = null) {
   const [header, ...lines] = csv.replace(/\r?\n$/, "").split(/\r?\n/);
   const expected = "time_s,kind,x_km,y_km,z_km,vx_km_s,vy_km_s,vz_km_s,altitude_km,speed_km_s," +
     "specific_energy_km2_s2,mass_kg,semi_major_axis_km,eccentricity,inclination_deg,raan_deg," +
@@ -51,8 +51,12 @@ export function parseTelemetry(csv) {
       velocity: [Number(vx), Number(vy), Number(vz)], altitude: Number(altitude), speed: Number(speed),
       mass: mass === "" ? null : Number(mass), axis: axis === "" ? null : Number(axis)};
   });
-  if (rows[0].time !== 0 || !["complete", "impact"].includes(rows.at(-1).kind)) {
+  const final = rows.at(-1);
+  if (rows[0].time !== 0 || !["complete", "impact"].includes(final.kind)) {
     throw new Error("The workspace returned an incomplete flight timeline.");
+  }
+  if (receipt && (receipt.rows !== rows.length || receipt.elapsed_s !== final.time || receipt.outcome !== final.kind)) {
+    throw new Error("The downloaded telemetry does not match the completed job. Retry to download it again.");
   }
   return rows;
 }
