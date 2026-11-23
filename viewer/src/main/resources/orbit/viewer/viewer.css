@@ -148,6 +148,22 @@
     -fx-border-color: #52dfcd;
 }
 
+.comparison-summary {
+    -fx-alignment: center-left;
+    -fx-padding: 9px 13px;
+}
+
+.comparison-value {
+    -fx-text-fill: #dce8f4;
+    -fx-font-family: "Monospaced";
+    -fx-font-size: 18px;
+    -fx-font-weight: bold;
+}
+
+.comparison-selection {
+    -fx-padding: 8px 13px;
+}
+
 .accent-button {
     -fx-background-color: #52dfcd;
     -fx-border-color: #74f3dd;

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -52,6 +53,23 @@ class ComparisonReportTest {
         assertThrows(IOException.class, () -> ComparisonReport.load(write(valid.replaceFirst("4\\.0", "390"))));
         assertThrows(IOException.class, () -> ComparisonReport.load(write(valid.stripTrailing() + "0\n")));
         assertThrows(IOException.class, () -> ComparisonReport.load(write(valid.replace("4.0,", "4.0\r,"))));
+    }
+
+    @Test
+    void displayReductionRetainsShortExtremaAndChronologicalOrder() throws IOException {
+        StringBuilder content = new StringBuilder();
+        for (int index = 0; index < 100; index++) {
+            double separation = index == 17 ? 30 : index == 18 ? 0.25 : 4;
+            content.append(row(index, separation, 0, true));
+        }
+        ComparisonReport report = ComparisonReport.load(write(content.toString()));
+        var reduced = ComparisonPlot.reduce(report.rows(), 10, ComparisonReport.Row::positionKm);
+        assertEquals(0, reduced.get(0).time());
+        assertEquals(99, reduced.get(reduced.size() - 1).time());
+        assertEquals(30, reduced.stream().mapToDouble(ComparisonReport.Row::positionKm).max().orElseThrow());
+        assertEquals(0.25, reduced.stream().mapToDouble(ComparisonReport.Row::positionKm).min().orElseThrow());
+        var times = new ArrayList<>(reduced.stream().map(ComparisonReport.Row::time).toList());
+        assertEquals(times.stream().sorted().distinct().toList(), times);
     }
 
     private Path write(String rows) throws IOException {

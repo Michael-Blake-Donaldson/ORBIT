@@ -40,6 +40,7 @@ public final class OrbitViewer extends Application {
     private final Label status = label("Awaiting telemetry", "status");
     private final Label message = label("", "message");
     private final Button open = new Button("Open CSV…");
+    private final Button compare = new Button("Comparison…");
     private final Button play = new Button("Play");
     private final Button previous = new Button("‹");
     private final Button next = new Button("›");
@@ -62,6 +63,7 @@ public final class OrbitViewer extends Application {
 
     private Telemetry.Flight flight;
     private Task<Telemetry.Flight> loading;
+    private ComparisonWindow comparison;
     private int selected = -1;
     private boolean selectingRow;
     private boolean playing;
@@ -80,6 +82,7 @@ public final class OrbitViewer extends Application {
     public void start(Stage stage) {
         open.setId("open-telemetry");
         open.setOnAction(ignored -> choose(stage));
+        compare.setOnAction(ignored -> openComparison(stage, null));
         message.setWrapText(true);
         message.managedProperty().bind(message.visibleProperty());
         message.visibleProperty().bind(message.textProperty().isNotEmpty());
@@ -105,13 +108,28 @@ public final class OrbitViewer extends Application {
         stage.setScene(scene);
         updateControls();
         stage.show();
-        if (!getParameters().getRaw().isEmpty()) {
+        if (!getParameters().getUnnamed().isEmpty()) {
             try {
-                load(Path.of(getParameters().getRaw().get(0)));
+                load(Path.of(getParameters().getUnnamed().get(0)));
             } catch (InvalidPathException exception) {
                 message.setText("The telemetry path is invalid.");
             }
         }
+        String comparisonPath = getParameters().getNamed().get("comparison");
+        if (comparisonPath != null) {
+            try {
+                openComparison(stage, Path.of(comparisonPath));
+            } catch (InvalidPathException exception) {
+                message.setText("The comparison path is invalid.");
+            }
+        }
+    }
+
+    private void openComparison(Stage stage, Path path) {
+        if (comparison == null) {
+            comparison = new ComparisonWindow(stage);
+        }
+        comparison.show(path);
     }
 
     @Override
@@ -127,7 +145,7 @@ public final class OrbitViewer extends Application {
                 label("MISSION TELEMETRY", "eyebrow"), fileName));
         identity.setAlignment(Pos.CENTER_LEFT);
         fileName.setMaxWidth(470);
-        HBox header = new HBox(16, identity, spacer(), status, open);
+        HBox header = new HBox(16, identity, spacer(), status, compare, open);
         header.getStyleClass().add("header");
         header.setAlignment(Pos.CENTER_LEFT);
         VBox top = new VBox(header, message);
@@ -423,19 +441,19 @@ public final class OrbitViewer extends Application {
         };
     }
 
-    private static Region spacer() {
+    static Region spacer() {
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
         return spacer;
     }
 
-    private static Label label(String text, String... styles) {
+    static Label label(String text, String... styles) {
         Label label = new Label(text);
         label.getStyleClass().addAll(styles);
         return label;
     }
 
-    private static String formatTime(double seconds, boolean milliseconds) {
+    static String formatTime(double seconds, boolean milliseconds) {
         long ms = Math.round(seconds * 1000);
         String clock = String.format(Locale.ROOT, "%02d:%02d:%02d", ms / 3_600_000, ms / 60_000 % 60, ms / 1000 % 60);
         return milliseconds ? clock + String.format(Locale.ROOT, ".%03d", ms % 1000) : clock;
