@@ -9,7 +9,10 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HexFormat;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -25,6 +28,7 @@ final class MissionJobs implements AutoCloseable {
     static final int MAX_RESULT_ROWS = 4_000;
     private static final int MAX_ACTIVE_PER_OWNER = 4;
     private static final int MAX_RETAINED_PER_OWNER = 16;
+    private static final int MAX_SAVED_PER_OWNER = 8;
     private static final Pattern KEY = Pattern.compile("[A-Za-z0-9_-]{16,80}");
     private static final Pattern OWNER = Pattern.compile("[A-Za-z0-9_-]{1,128}");
 
@@ -36,7 +40,8 @@ final class MissionJobs implements AutoCloseable {
         }
     }
 
-    record Snapshot(UUID id, State state, MissionController.Receipt receipt, String failure) {}
+    record Snapshot(UUID id, State state, MissionController.Receipt receipt, String failure,
+                    Instant savedAt, String planDigest, String telemetryDigest) {}
 
     private record OwnerKey(String owner, String key) {}
 
@@ -98,6 +103,7 @@ final class MissionJobs implements AutoCloseable {
             job.expires = record.expires();
             job.failure = record.failure();
             job.telemetryDigest = record.telemetryDigest();
+            job.savedAt = record.savedAt();
             if (job.state == State.COMPLETE) {
                 try {
                     if (job.telemetryDigest != null) {
@@ -181,6 +187,55 @@ final class MissionJobs implements AutoCloseable {
 
     synchronized Snapshot status(String owner, UUID id) throws JobException {
         return find(owner, id).snapshot();
+    }
+
+    synchronized List<Snapshot> savedRuns(String owner) throws JobException {
+        requireOwner(owner);
+        return jobs.values().stream().filter(job -> job.savedAt != null && job.key.owner().equals(owner))
+                .sorted(Comparator.<Job, Instant>comparing(job -> job.savedAt).reversed().thenComparing(job -> job.id))
+                .map(Job::snapshot).toList();
+    }
+
+    synchronized Snapshot saveRun(String owner, UUID id) throws JobException, IOException {
+        Job job = find(owner, id);
+        if (job.state != State.COMPLETE) {
+            throw new JobException(409, "Only completed runs can be saved.");
+        }
+        if (job.savedAt == null) {
+            if (savedRuns(owner).size() >= MAX_SAVED_PER_OWNER) {
+                throw new JobException(429, "Your saved run limit is full. Delete a saved run to make room.");
+            }
+            if (jobs.values().stream().filter(candidate -> candidate.savedAt != null).count() >= Math.max(1, maxEntries / 2)) {
+                throw new JobException(503, "The saved run store is at capacity.");
+            }
+            job.checkedPlan();
+            job.checkedTelemetry();
+            Instant now = clock.instant();
+            job.persist(job.state, job.expires, null, job.telemetryDigest, now);
+            job.savedAt = now;
+        }
+        return job.snapshot();
+    }
+
+    synchronized void deleteSavedRun(String owner, UUID id) throws JobException, IOException {
+        Job job = findSaved(owner, id);
+        Instant now = clock.instant();
+        job.persist(job.state, now, null, job.telemetryDigest, null);
+        job.savedAt = null;
+        job.expires = now;
+        expire();
+    }
+
+    synchronized byte[] savedPlan(String owner, UUID id) throws JobException {
+        return findSaved(owner, id).checkedPlan();
+    }
+
+    private Job findSaved(String owner, UUID id) throws JobException {
+        Job job = find(owner, id);
+        if (job.savedAt == null) {
+            throw new JobException(404, "Saved run not found.");
+        }
+        return job;
     }
 
     synchronized Snapshot cancel(String owner, UUID id) throws JobException, IOException {
@@ -328,6 +383,7 @@ final class MissionJobs implements AutoCloseable {
         private MissionController.Receipt receipt;
         private String failure;
         private byte[] telemetryDigest;
+        private Instant savedAt;
 
         Job(UUID id, OwnerKey key, byte[] hash, byte[] body) {
             this.id = id;
@@ -337,27 +393,48 @@ final class MissionJobs implements AutoCloseable {
         }
 
         Snapshot snapshot() {
-            return new Snapshot(id, state, receipt, failure);
+            return new Snapshot(id, state, receipt, failure, savedAt,
+                    savedAt == null ? null : HexFormat.of().formatHex(hash),
+                    savedAt == null ? null : HexFormat.of().formatHex(telemetryDigest));
         }
 
         boolean isExpired(Instant now) {
-            return expires != null && !expires.isAfter(now);
+            return savedAt == null && expires != null && !expires.isAfter(now);
         }
 
         void checkpoint(State next, Instant expiration, String message, byte[] artifact) throws IOException {
-            store.save(new MissionJobStore.Entry(id, key.owner(), key.key(), hash, next, expiration, message, artifact));
+            persist(next, expiration, message, artifact, savedAt);
+        }
+
+        void persist(State next, Instant expiration, String message, byte[] artifact, Instant saved) throws IOException {
+            store.save(new MissionJobStore.Entry(id, key.owner(), key.key(), hash, next, expiration, message, artifact, saved));
         }
 
         void finish(State terminal, MissionController.Receipt result, String message) throws IOException {
             Instant expiration = clock.instant().plus(retention);
             byte[] artifact = terminal == State.COMPLETE ? digest(store.readTelemetry(id)) : null;
-            checkpoint(terminal, expiration, message, artifact);
+            persist(terminal, expiration, message, artifact, terminal == State.COMPLETE ? savedAt : null);
             state = terminal;
             thread = null;
             expires = expiration;
             receipt = result;
             failure = message;
             telemetryDigest = artifact;
+            if (terminal != State.COMPLETE) {
+                savedAt = null;
+            }
+        }
+
+        byte[] checkedPlan() throws JobException {
+            try {
+                byte[] plan = store.readPlan(id);
+                if (plan.length <= MAX_PLAN_BYTES && MessageDigest.isEqual(hash, digest(plan))) {
+                    return plan;
+                }
+            } catch (IOException ignored) {
+                // Jobs created before plan retention may lack the original bytes.
+            }
+            throw new JobException(409, "The original mission plan is unavailable or failed its integrity check.");
         }
 
         byte[] checkedTelemetry() throws IOException {
@@ -409,7 +486,7 @@ final class MissionJobs implements AutoCloseable {
                     if (state == State.CANCELLING) {
                         terminal = State.CANCELLED;
                     } else if (failureMessage == null && result != null && staging != null) {
-                        store.publish(id, staging.resolve("telemetry.csv"));
+                        store.publish(id, staging.resolve("plan.json"), staging.resolve("telemetry.csv"));
                         terminal = State.COMPLETE;
                     } else {
                         terminal = State.FAILED;

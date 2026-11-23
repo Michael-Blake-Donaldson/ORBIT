@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 MAX_WEB_SAMPLES = 4000
 _MAX_CSV_BYTES = 4 * 1024 * 1024
 _TIMEOUT_S = 15
-_JOB_PATH = re.compile(r"/api/jobs/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}(?:/telemetry)?")
+_JOB_PATH = re.compile(r"/api/jobs/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}(?:/(?:telemetry|plan|saved))?")
 _JOB_ERRORS = {400: "Bad Request", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed",
                409: "Conflict", 413: "Content Too Large", 415: "Unsupported Media Type", 429: "Too Many Requests",
                500: "Internal Server Error", 503: "Service Unavailable"}
@@ -185,7 +185,8 @@ class JobClient:
                     return "200 OK", "text/csv; charset=utf-8", result
             elif (
                 content_type == "application/json" and status in (200, 202, *_JOB_ERRORS)
-                and size <= 4096 and len(result := response.read(size)) == size
+                and size <= (_MAX_PLAN_BYTES if status == 200 and path.endswith("/plan") else 4096)
+                and len(result := response.read(size)) == size
             ):
                 reason = {200: "OK", 202: "Accepted", **_JOB_ERRORS}[status]
                 return f"{status} {reason}", "application/json", result
@@ -238,9 +239,9 @@ def create_app(
             return "200 OK", content_type, assets.joinpath(name).read_bytes()
         if method == "GET" and path == "/api/capabilities":
             return _json("200 OK", {"mission_jobs": jobs is not None})
-        if path in ("/api/validate", "/api/run", "/api/jobs") or _JOB_PATH.fullmatch(path):
+        if path in ("/api/validate", "/api/run", "/api/jobs", "/api/saved-runs") or _JOB_PATH.fullmatch(path):
             origin = environ.get("HTTP_ORIGIN")
-            required = origin is not None or (identity is not None and method in ("POST", "DELETE"))
+            required = origin is not None or (identity is not None and method in ("POST", "PUT", "DELETE"))
             if (required and origin != expected_origin) or environ.get("HTTP_SEC_FETCH_SITE") == "cross-site":
                 return _error("403 Forbidden", "Only same-origin workspace requests are accepted.")
         if method == "POST" and path in ("/api/validate", "/api/run"):
@@ -253,10 +254,11 @@ def create_app(
                 return _error("400 Bad Request", "Provide a valid idempotency key.")
             body = _validated_request(environ)
             return jobs.forward("POST", "/jobs", body, key, owner=owner) if isinstance(body, bytes) else body
-        if jobs is not None and _JOB_PATH.fullmatch(path) and (
-            method == "GET" or (method == "DELETE" and not path.endswith("/telemetry"))
-        ):
-            return jobs.forward(method, path.removeprefix("/api"), owner=owner)
+        if jobs is not None:
+            if path == "/api/saved-runs" and method == "GET":
+                return jobs.forward("GET", "/saved-runs", owner=owner)
+            if _JOB_PATH.fullmatch(path) and (method == "GET" or method in ("PUT", "DELETE")):
+                return jobs.forward(method, path.removeprefix("/api"), owner=owner)
         return _error("404 Not Found", "Workspace route not found.")
 
     def application(environ: dict[str, Any], start_response: _StartResponse) -> Iterable[bytes]:

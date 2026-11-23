@@ -33,7 +33,7 @@ final class MissionJobStore implements AutoCloseable {
     private final FileLock lock;
 
     record Entry(UUID id, String owner, String key, byte[] digest, MissionJobs.State state,
-                 Instant expires, String failure, byte[] telemetryDigest) {}
+                 Instant expires, String failure, byte[] telemetryDigest, Instant savedAt) {}
 
     MissionJobStore(Path spool) throws IOException {
         Path parent = spool.toRealPath();
@@ -85,8 +85,15 @@ final class MissionJobStore implements AutoCloseable {
         MissionController.removeStaging(directory(id));
     }
 
-    void publish(UUID id, Path telemetry) throws IOException {
+    void publish(UUID id, Path plan, Path telemetry) throws IOException {
+        Files.move(plan, directory(id).resolve("plan.json"), StandardCopyOption.ATOMIC_MOVE);
         Files.move(telemetry, telemetry(id), StandardCopyOption.ATOMIC_MOVE);
+    }
+
+    byte[] readPlan(UUID id) throws IOException {
+        try (var input = Files.newInputStream(directory(id).resolve("plan.json"), LinkOption.NOFOLLOW_LINKS)) {
+            return input.readNBytes(MissionJobs.MAX_PLAN_BYTES + 1);
+        }
     }
 
     byte[] readTelemetry(UUID id) throws IOException {
@@ -114,6 +121,9 @@ final class MissionJobStore implements AutoCloseable {
         }
         if (entry.telemetryDigest() != null) {
             values.setProperty("telemetry_digest", HexFormat.of().formatHex(entry.telemetryDigest()));
+        }
+        if (entry.savedAt() != null) {
+            values.setProperty("saved_at", entry.savedAt().toString());
         }
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         values.store(bytes, null);
@@ -181,15 +191,18 @@ final class MissionJobStore implements AutoCloseable {
             String failure = values.getProperty("failure");
             String telemetry = values.getProperty("telemetry_digest");
             byte[] telemetryDigest = telemetry == null ? null : HexFormat.of().parseHex(telemetry);
+            String saved = values.getProperty("saved_at");
+            Instant savedAt = saved == null ? null : Instant.parse(saved);
             if ((!schema.equals("1") && !schema.equals("2")) || !MissionJobs.validOwner(owner)
                     || !MissionJobs.validKey(key) || digest.length != 32
                     || state.terminal() != (expires != null) || (state == MissionJobs.State.FAILED) != (failure != null)
                     || (failure != null && failure.length() > 240)
                     || (schema.equals("2") && (state == MissionJobs.State.COMPLETE) != (telemetryDigest != null))
-                    || (telemetryDigest != null && telemetryDigest.length != 32)) {
+                    || (telemetryDigest != null && telemetryDigest.length != 32)
+                    || (savedAt != null && state != MissionJobs.State.COMPLETE)) {
                 throw new IOException("Invalid job checkpoint fields.");
             }
-            return new Entry(id, owner, key, digest, state, expires, failure, telemetryDigest);
+            return new Entry(id, owner, key, digest, state, expires, failure, telemetryDigest, savedAt);
         } catch (IllegalArgumentException | java.time.DateTimeException e) {
             throw new IOException("Invalid job checkpoint values.", e);
         }
@@ -200,7 +213,7 @@ final class MissionJobStore implements AutoCloseable {
             for (Path file : files) {
                 String name = file.getFileName().toString();
                 if (name.startsWith("work-") || name.startsWith("checkpoint-")
-                        || (!keepTelemetry && name.equals("telemetry.csv"))) {
+                        || (!keepTelemetry && (name.equals("telemetry.csv") || name.equals("plan.json")))) {
                     MissionController.removeStaging(file);
                 }
             }

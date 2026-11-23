@@ -78,6 +78,10 @@ final class MissionHttpService implements AutoCloseable {
             return json(200, "{\"status\":\"ready\"}");
         }
         String owner = header(exchange, "X-Orbit-Owner");
+        if (path.equals("/saved-runs") && method.equals("GET")) {
+            return json(200, jobs.savedRuns(owner).stream().map(MissionHttpService::snapshotJson)
+                    .collect(java.util.stream.Collectors.joining(",", "[", "]")));
+        }
         if (path.equals("/jobs") && method.equals("POST")) {
             String content = header(exchange, "Content-Type");
             if (content == null || !content.split(";", 2)[0].strip().equalsIgnoreCase("application/json")) {
@@ -100,6 +104,18 @@ final class MissionHttpService implements AutoCloseable {
             if (parts.length == 4 && parts[3].equals("telemetry") && method.equals("GET")) {
                 return new Reply(200, TELEMETRY, jobs.result(owner, id));
             }
+            if (parts.length == 4 && parts[3].equals("plan") && method.equals("GET")) {
+                return new Reply(200, JSON, jobs.savedPlan(owner, id));
+            }
+            if (parts.length == 4 && parts[3].equals("saved")) {
+                if (method.equals("PUT")) {
+                    return snapshot(200, jobs.saveRun(owner, id));
+                }
+                if (method.equals("DELETE")) {
+                    jobs.deleteSavedRun(owner, id);
+                    return json(200, "{\"deleted\":true}");
+                }
+            }
             if (parts.length == 3) {
                 return switch (method) {
                     case "GET" -> snapshot(200, jobs.status(owner, id));
@@ -117,6 +133,10 @@ final class MissionHttpService implements AutoCloseable {
     }
 
     private static Reply snapshot(int status, MissionJobs.Snapshot job) {
+        return json(status, snapshotJson(job));
+    }
+
+    private static String snapshotJson(MissionJobs.Snapshot job) {
         String fields = "\"id\":" + quote(job.id().toString()) + ",\"state\":" +
                 quote(job.state().name().toLowerCase(Locale.ROOT));
         if (job.failure() != null) {
@@ -127,7 +147,11 @@ final class MissionHttpService implements AutoCloseable {
             fields += ",\"outcome\":" + quote(receipt.outcome()) + ",\"elapsed_s\":" + receipt.elapsedSeconds()
                     + ",\"rows\":" + receipt.rows();
         }
-        return json(status, "{" + fields + "}");
+        if (job.savedAt() != null) {
+            fields += ",\"saved_at\":" + quote(job.savedAt().toString()) + ",\"plan_sha256\":" + quote(job.planDigest())
+                    + ",\"telemetry_sha256\":" + quote(job.telemetryDigest());
+        }
+        return "{" + fields + "}";
     }
 
     private static Reply error(int status, String message) {

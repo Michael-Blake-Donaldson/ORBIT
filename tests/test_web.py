@@ -11,6 +11,7 @@ import tempfile
 import time
 import unittest
 from contextlib import contextmanager
+from hashlib import sha256
 from http.client import HTTPResponse
 from importlib.util import find_spec
 from pathlib import Path
@@ -253,6 +254,20 @@ class WorkspaceTests(unittest.TestCase):
             for path, headers in ((first_path, first_user), (second_path, second_user)):
                 self.assertEqual(self.wait_for_job(path, **headers)["state"], "complete")
                 self.assertIn(b"7200.0,complete,", self.request(f"{path}/telemetry", **headers)["body"])
+            saved_path = f"{first_path}/saved"
+            missing_origin = first_user | {"HTTP_ORIGIN": None}
+            self.assertEqual(self.request(saved_path, REQUEST_METHOD="PUT", **missing_origin)["status"], "403 Forbidden")
+            response = self.request(saved_path, REQUEST_METHOD="PUT", **first_user)
+            self.assertEqual(response["status"], "200 OK", response["body"])
+            receipt = json.loads(response["body"])
+            self.assertEqual(receipt["plan_sha256"], sha256(plan).hexdigest())
+            self.assertEqual(self.request(f"{first_path}/plan", **first_user)["body"], plan)
+            self.assertEqual(json.loads(self.request("/api/saved-runs", **first_user)["body"]), [receipt])
+            self.assertEqual(json.loads(self.request("/api/saved-runs", **spoofed)["body"]), [])
+            self.assertEqual(self.request(f"{first_path}/plan", **spoofed)["status"], "404 Not Found")
+            self.assertEqual(self.request(saved_path, REQUEST_METHOD="DELETE", **spoofed)["status"], "404 Not Found")
+            self.assertEqual(self.request(saved_path, REQUEST_METHOD="DELETE", **first_user)["status"], "200 OK")
+            self.assertEqual(self.request(f"{first_path}/telemetry", **first_user)["status"], "404 Not Found")
 
     @staticmethod
     def new_job_client():

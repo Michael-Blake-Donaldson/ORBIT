@@ -178,11 +178,11 @@ class MissionJobsTest {
         try (var store = new MissionJobStore(spool)) {
             store.create(running);
             store.save(new MissionJobStore.Entry(
-                    running, OWNER, FIRST, hash, MissionJobs.State.QUEUED, null, null, null));
+                    running, OWNER, FIRST, hash, MissionJobs.State.QUEUED, null, null, null, null));
             Files.write(store.telemetry(running), CSV);
             store.create(cancelling);
             store.save(new MissionJobStore.Entry(
-                    cancelling, OWNER, SECOND, hash, MissionJobs.State.CANCELLING, null, null, null));
+                    cancelling, OWNER, SECOND, hash, MissionJobs.State.CANCELLING, null, null, null, null));
             Path interruptedWork = Files.createTempDirectory(store.directory(cancelling), "work-");
             Files.write(interruptedWork.resolve("telemetry.csv"), CSV);
         }
@@ -234,6 +234,37 @@ class MissionJobsTest {
         try (MissionJobs jobs = service((plan, telemetry) -> null)) {
             assertArrayEquals(CSV, jobs.result(OWNER, id));
             assertTrue(Files.readString(checkpoint).contains("telemetry_digest="));
+        }
+    }
+
+    @Test
+    void savedRunsKeepTheExactPlanPastExpiryAndRestartAndSupportOwnerDeletion() throws Exception {
+        var time = new AtomicReference<>(Instant.parse("2025-01-01T00:00:00Z"));
+        Clock clock = clock(time, ZoneOffset.UTC);
+        UUID id;
+        try (var jobs = new MissionJobs(spool, 1, 1, 4, Duration.ofMinutes(1), clock, (plan, telemetry) -> {
+            Files.write(telemetry, CSV);
+            return new MissionController.Receipt("complete", 0, 1);
+        })) {
+            id = terminal(jobs, jobs.submit(OWNER, FIRST, PLAN).id()).id();
+            assertTrue(jobs.savedRuns(OWNER).isEmpty());
+            assertEquals(404, assertThrows(MissionJobs.JobException.class, () -> jobs.savedPlan(OWNER, id)).status());
+            assertEquals(time.get(), jobs.saveRun(OWNER, id).savedAt());
+            assertEquals(404, assertThrows(MissionJobs.JobException.class,
+                    () -> jobs.deleteSavedRun("other-owner", id)).status());
+        }
+        time.set(time.get().plusSeconds(600));
+        try (var jobs = new MissionJobs(spool, 1, 1, 4, Duration.ofMinutes(1), clock, (plan, telemetry) -> null)) {
+            assertEquals(id, jobs.savedRuns(OWNER).get(0).id());
+            assertTrue(jobs.savedRuns("other-owner").isEmpty());
+            assertArrayEquals(PLAN, jobs.savedPlan(OWNER, id));
+            assertArrayEquals(CSV, jobs.result(OWNER, id));
+            assertEquals(64, jobs.saveRun(OWNER, id).planDigest().length());
+            jobs.deleteSavedRun(OWNER, id);
+            assertTrue(jobs.savedRuns(OWNER).isEmpty());
+        }
+        try (var jobs = new MissionJobs(spool, 1, 1, 4, Duration.ofMinutes(1), clock, (plan, telemetry) -> null)) {
+            assertEquals(404, assertThrows(MissionJobs.JobException.class, () -> jobs.status(OWNER, id)).status());
         }
     }
 
