@@ -112,31 +112,15 @@ public final class MissionController {
     static Receipt simulate(Path python, Path plan, Path telemetry, int timeout, int maxRows, int maxBytes,
                             ProcessBuilder.Redirect diagnostics) throws IOException, InterruptedException {
         Path report = telemetry.resolveSibling("engine.txt");
-        ProcessBuilder command = new ProcessBuilder(
+        int status = executeWorker(telemetry.getParent(), timeout, diagnostics,
                 python.toString(), "-I", "-X", "utf8", "-m", "orbit_sim", "--max-rows", Integer.toString(maxRows),
                 "--engine-report", report.toString(), "--",
-                plan.toString(), telemetry.toString())
-                .directory(telemetry.getParent().toFile())
-                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                .redirectError(diagnostics);
-        command.environment().remove("ORBIT_JOB_TOKEN");
-        Process worker = command.start();
-        try {
-            worker.getOutputStream().close();
-            if (!worker.waitFor(timeout, TimeUnit.SECONDS)) {
-                throw new WorkerFailure(124, "simulation exceeded the " + timeout + " second timeout");
-            }
-            int status = worker.exitValue();
-            if (status == ROW_LIMIT_EXIT) {
-                throw new WorkerFailure(status, "simulation exceeded the " + maxRows + " telemetry row limit");
-            }
-            if (status != 0) {
-                throw new WorkerFailure(1, "simulation worker exited with code " + status);
-            }
-        } finally {
-            if (worker.isAlive()) {
-                terminate(worker);
-            }
+                plan.toString(), telemetry.toString());
+        if (status == ROW_LIMIT_EXIT) {
+            throw new WorkerFailure(status, "simulation exceeded the " + maxRows + " telemetry row limit");
+        }
+        if (status != 0) {
+            throw new WorkerFailure(1, "simulation worker exited with code " + status);
         }
         Receipt receipt = readReceipt(telemetry, maxRows, maxBytes);
         String engine;
@@ -152,6 +136,48 @@ public final class MissionController {
         }
         return new Receipt(receipt.outcome(), receipt.elapsedSeconds(), receipt.rows(), engine);
     }
+
+    static ComparisonReply compare(Path python, Path staging, byte[] baseline, byte[] candidate)
+            throws IOException, InterruptedException {
+        Path first = Files.write(staging.resolve("baseline.json"), baseline);
+        Path second = Files.write(staging.resolve("candidate.json"), candidate);
+        Path output = staging.resolve("comparison.json");
+        int status = executeWorker(staging, 15, ProcessBuilder.Redirect.DISCARD,
+                python.toString(), "-I", "-X", "utf8", "-m", "orbit_sim.web_compare", "--",
+                first.toString(), second.toString(), output.toString(), Integer.toString(MissionJobs.MAX_RESULT_ROWS));
+        if ((status != 0 && status != 3) || !Files.isRegularFile(output, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("comparison worker failed");
+        }
+        int limit = status == 0 ? MissionJobs.MAX_RESULT_BYTES : 4096;
+        try (var input = Files.newInputStream(output, LinkOption.NOFOLLOW_LINKS)) {
+            byte[] data = input.readNBytes(limit + 1);
+            if (data.length == 0 || data.length > limit) {
+                throw new IOException("invalid comparison result size");
+            }
+            return new ComparisonReply(status == 0 ? 200 : 422, new String(data, StandardCharsets.UTF_8));
+        }
+    }
+
+    private static int executeWorker(Path directory, int timeout, ProcessBuilder.Redirect diagnostics, String... arguments)
+            throws IOException, InterruptedException {
+        ProcessBuilder command = new ProcessBuilder(arguments).directory(directory.toFile())
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD).redirectError(diagnostics);
+        command.environment().remove("ORBIT_JOB_TOKEN");
+        Process worker = command.start();
+        try {
+            worker.getOutputStream().close();
+            if (!worker.waitFor(timeout, TimeUnit.SECONDS)) {
+                throw new WorkerFailure(124, "simulation exceeded the " + timeout + " second timeout");
+            }
+            return worker.exitValue();
+        } finally {
+            if (worker.isAlive()) {
+                terminate(worker);
+            }
+        }
+    }
+
+    record ComparisonReply(int status, String json) {}
 
     static boolean validEngineReport(String engine) {
         return ENGINE.matcher(engine).matches();

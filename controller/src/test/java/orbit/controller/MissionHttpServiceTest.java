@@ -34,7 +34,7 @@ class MissionHttpServiceTest {
                     Files.writeString(telemetry, CSV);
                     return new MissionController.Receipt("complete", 0, 1);
                 });
-             var service = new MissionHttpService(0, TOKEN, jobs)) {
+             var service = new MissionHttpService(0, TOKEN, jobs, Path.of("unused"))) {
             assertEquals(403, send(request(service, "/health")).statusCode());
             assertEquals(403, send(authorized(service, "/health").header("Origin", "http://example.invalid"))
                     .statusCode());

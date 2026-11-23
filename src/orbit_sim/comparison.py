@@ -53,13 +53,7 @@ def compare_trajectories(
     reference: Mission, candidate: Mission, sample_interval_s: float | None = None,
 ) -> Iterator[TrajectoryDelta]:
     """Stream candidate minus reference differences on their common elapsed-time grid."""
-    if reference.duration_s != candidate.duration_s:
-        raise ValueError("trajectory comparison requires equal mission durations")
-    if reference.epoch_jd_tdb != candidate.epoch_jd_tdb:
-        raise ValueError("trajectory comparison requires matching mission epochs")
-    interval = sample_interval_s
-    if interval is None:
-        interval = max(reference.sample_interval_s, candidate.sample_interval_s)
+    interval = _comparison_interval(reference, candidate, sample_interval_s)
     reference = replace(reference, sample_interval_s=interval, track_apsides=False)
     candidate = replace(candidate, sample_interval_s=interval, track_apsides=False)
     for grid_reference, grid_candidate in zip_longest(_grid_samples(reference), _grid_samples(candidate)):
@@ -80,3 +74,11 @@ def compare_trajectories(
             tuple(float(axis @ dr) for axis in basis) if basis is not None else None,
             tuple(float(axis @ dv) for axis in basis) if basis is not None else None,
         )
+
+
+def _comparison_interval(reference: Mission, candidate: Mission, interval: float | None = None) -> float:
+    if reference.duration_s != candidate.duration_s:
+        raise ValueError("Trajectory comparison requires equal mission durations.")
+    if reference.epoch_jd_tdb != candidate.epoch_jd_tdb:
+        raise ValueError("Trajectory comparison requires matching mission epochs.")
+    return max(reference.sample_interval_s, candidate.sample_interval_s) if interval is None else interval

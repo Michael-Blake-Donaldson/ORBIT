@@ -29,13 +29,15 @@ final class MissionHttpService implements AutoCloseable {
     private final ThreadPoolExecutor requests;
     private final ScheduledExecutorService maintenance;
     private final MissionJobs jobs;
+    private final Path python;
     private final byte[] authorization;
 
-    MissionHttpService(int port, String token, MissionJobs jobs) throws IOException {
+    MissionHttpService(int port, String token, MissionJobs jobs, Path python) throws IOException {
         if (token == null || !token.matches("[A-Za-z0-9_-]{32,128}")) {
             throw new IllegalArgumentException("Set ORBIT_JOB_TOKEN to a token with 32 to 128 URL-safe characters.");
         }
         this.jobs = jobs;
+        this.python = python;
         authorization = ("Bearer " + token).getBytes(StandardCharsets.US_ASCII);
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 24);
         requests = new ThreadPoolExecutor(4, 4, 0, TimeUnit.SECONDS, new ArrayBlockingQueue<>(24));
@@ -91,14 +93,23 @@ final class MissionHttpService implements AutoCloseable {
             return snapshot(202, jobs.submit(owner, header(exchange, "Idempotency-Key"), input));
         }
         String[] parts = path.split("/", -1);
+        if (parts.length == 4 && parts[1].equals("comparisons") && method.equals("POST")) {
+            UUID baseline = canonicalId(parts[2]);
+            UUID candidate = canonicalId(parts[3]);
+            if (baseline == null || candidate == null) {
+                return error(404, "Saved run not found.");
+            }
+            var comparison = jobs.compare(owner, baseline, candidate, python);
+            var reply = comparison.reply();
+            if (reply.status() != 200) {
+                return json(reply.status(), reply.json());
+            }
+            return json(200, "{\"baseline\":" + snapshotJson(comparison.baseline()) + ",\"candidate\":"
+                    + snapshotJson(comparison.candidate()) + ",\"report\":" + reply.json() + "}");
+        }
         if ((parts.length == 3 || parts.length == 4) && parts[1].equals("jobs")) {
-            UUID id;
-            try {
-                id = UUID.fromString(parts[2]);
-                if (!id.toString().equals(parts[2])) {
-                    return error(404, "Mission job not found.");
-                }
-            } catch (IllegalArgumentException ignored) {
+            UUID id = canonicalId(parts[2]);
+            if (id == null) {
                 return error(404, "Mission job not found.");
             }
             if (parts.length == 4 && parts[3].equals("telemetry") && method.equals("GET")) {
@@ -125,6 +136,15 @@ final class MissionHttpService implements AutoCloseable {
             }
         }
         return error(404, "Job service route not found.");
+    }
+
+    private static UUID canonicalId(String value) {
+        try {
+            UUID id = UUID.fromString(value);
+            return id.toString().equals(value) ? id : null;
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
     }
 
     private static String header(HttpExchange exchange, String name) {
@@ -219,7 +239,7 @@ final class MissionHttpService implements AutoCloseable {
                      (plan, telemetry) -> MissionController.simulate(
                              python, plan, telemetry, 15, MissionJobs.MAX_RESULT_ROWS,
                              MissionJobs.MAX_RESULT_BYTES, ProcessBuilder.Redirect.DISCARD));
-                 var service = new MissionHttpService(port, System.getenv("ORBIT_JOB_TOKEN"), jobs)) {
+                 var service = new MissionHttpService(port, System.getenv("ORBIT_JOB_TOKEN"), jobs, python)) {
                 System.out.println("ORBIT job service at http://127.0.0.1:" + service.port());
                 stopped.await();
             } finally {

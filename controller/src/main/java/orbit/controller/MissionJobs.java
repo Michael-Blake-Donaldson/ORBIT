@@ -16,9 +16,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 
 /** Bounded, single-instance job execution. Only completed jobs expose telemetry. */
@@ -73,6 +76,9 @@ final class MissionJobs implements AutoCloseable {
     private final Map<UUID, Job> jobs = new HashMap<>();
     private final Map<OwnerKey, Job> keys = new HashMap<>();
     private boolean closed;
+    private String comparisonOwner;
+
+    record Comparison(Snapshot baseline, Snapshot candidate, MissionController.ComparisonReply reply) {}
 
     MissionJobs(Path spool, int parallelism, int queueSize, int maxEntries, Duration retention, Clock clock,
                 Worker worker) throws IOException {
@@ -231,6 +237,61 @@ final class MissionJobs implements AutoCloseable {
         return findSaved(owner, id).checkedPlan();
     }
 
+    Comparison compare(String owner, UUID baseline, UUID candidate, Path python) throws JobException, IOException {
+        FutureTask<MissionController.ComparisonReply> task;
+        synchronized (this) {
+            Job first = findSaved(owner, baseline);
+            Job second = findSaved(owner, candidate);
+            if (baseline.equals(candidate)) {
+                throw new JobException(400, "Choose two different saved runs.");
+            }
+            if (closed || comparisonOwner != null) {
+                throw new JobException(503, "The comparison worker is busy. Try again shortly.");
+            }
+            checkActiveCapacity(owner);
+            byte[] referencePlan = first.checkedPlan();
+            byte[] candidatePlan = second.checkedPlan();
+            task = new FutureTask<>(() -> {
+                Path staging = Files.createTempDirectory("orbit-comparison-");
+                try {
+                    return MissionController.compare(python, staging, referencePlan, candidatePlan);
+                } finally {
+                    MissionController.removeStaging(staging);
+                }
+            });
+            try {
+                workers.execute(task);
+            } catch (RejectedExecutionException ignored) {
+                throw new JobException(503, "The mission queue is full. Try again shortly.");
+            }
+            comparisonOwner = owner;
+        }
+        try {
+            // Leave a response window inside the HTTP server's 15-second write deadline.
+            var reply = task.get(14, TimeUnit.SECONDS);
+            synchronized (this) {
+                // A run may have been deleted while its comparison was computing.
+                return new Comparison(findSaved(owner, baseline).snapshot(), findSaved(owner, candidate).snapshot(), reply);
+            }
+        } catch (TimeoutException ignored) {
+            throw new JobException(503, "The comparison exceeded its deadline.");
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+            throw new JobException(503, "The comparison was interrupted.");
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof MissionController.WorkerFailure failure && failure.status() == 124) {
+                throw new JobException(503, "The comparison exceeded its deadline.");
+            }
+            throw new IOException("The comparison worker failed.", e.getCause());
+        } finally {
+            task.cancel(true);
+            workers.remove(task);
+            synchronized (this) {
+                comparisonOwner = null;
+            }
+        }
+    }
+
     private Job findSaved(String owner, UUID id) throws JobException {
         Job job = find(owner, id);
         if (job.savedAt == null) {
@@ -271,21 +332,27 @@ final class MissionJobs implements AutoCloseable {
     }
 
     private void checkOwnerCapacity(String owner) throws JobException {
+        checkActiveCapacity(owner);
         int retained = 0;
-        int active = 0;
         for (Job job : jobs.values()) {
             if (job.key.owner().equals(owner)) {
                 retained++;
-                if (!job.state.terminal()) {
-                    active++;
-                }
+            }
+        }
+        if (retained >= MAX_RETAINED_PER_OWNER) {
+            throw new JobException(429, "Your retained job limit is full. Try again after older jobs expire.");
+        }
+    }
+
+    private void checkActiveCapacity(String owner) throws JobException {
+        int active = owner.equals(comparisonOwner) ? 1 : 0;
+        for (Job job : jobs.values()) {
+            if (job.key.owner().equals(owner) && !job.state.terminal()) {
+                active++;
             }
         }
         if (active >= MAX_ACTIVE_PER_OWNER) {
             throw new JobException(429, "You already have four active mission jobs.");
-        }
-        if (retained >= MAX_RETAINED_PER_OWNER) {
-            throw new JobException(429, "Your retained job limit is full. Try again after older jobs expire.");
         }
     }
 

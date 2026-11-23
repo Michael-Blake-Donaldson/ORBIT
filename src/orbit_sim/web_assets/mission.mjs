@@ -21,9 +21,11 @@ export const events = {
 export const metrics = {
   altitude: { label: "Altitude", unit: "km" }, speed: { label: "Speed", unit: "km/s" },
   mass: { label: "Mass", unit: "kg" }, axis: { label: "Semi-major axis", unit: "km" },
+  positionDifference: {label: "Position difference", unit: "km"},
+  velocityDifference: {label: "Velocity difference", unit: "km/s"},
 };
 
-const decimal = /^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/;
+export const decimal = /^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/;
 const optionalColumns = new Set([11, 12, 14, 15, 16, 17]);
 
 export function parseTelemetry(csv, receipt = null) {

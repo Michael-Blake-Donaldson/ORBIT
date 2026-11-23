@@ -25,9 +25,12 @@ if TYPE_CHECKING:
 MAX_WEB_SAMPLES = 4000
 _MAX_CSV_BYTES = 4 * 1024 * 1024
 _TIMEOUT_S = 15
-_JOB_PATH = re.compile(r"/api/jobs/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}(?:/(?:telemetry|plan|saved))?")
+_UUID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
+_JOB_PATH = re.compile(rf"/api/jobs/{_UUID}(?:/(?:telemetry|plan|saved))?")
+_COMPARISON_PATH = re.compile(rf"/api/comparisons/{_UUID}/{_UUID}")
 _JOB_ERRORS = {400: "Bad Request", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed",
-               409: "Conflict", 413: "Content Too Large", 415: "Unsupported Media Type", 429: "Too Many Requests",
+               409: "Conflict", 413: "Content Too Large", 415: "Unsupported Media Type", 422: "Unprocessable Content",
+               429: "Too Many Requests",
                500: "Internal Server Error", 503: "Service Unavailable"}
 _ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -36,9 +39,12 @@ _ASSETS = {
     "/plots.mjs": ("plots.mjs", "text/javascript; charset=utf-8"),
     "/mission.mjs": ("mission.mjs", "text/javascript; charset=utf-8"),
     "/jobs.mjs": ("jobs.mjs", "text/javascript; charset=utf-8"),
+    "/comparison.mjs": ("comparison.mjs", "text/javascript; charset=utf-8"),
     "/api/examples/hohmann": ("missions/hohmann.json", "application/json"),
     "/api/examples/finite-burn": ("missions/finite-burn.json", "application/json"),
     "/api/examples/j2-precession": ("missions/j2-precession.json", "application/json"),
+    "/api/examples/lunar-baseline": ("missions/lunar_baseline.json", "application/json"),
+    "/api/examples/lunar-perturbation": ("missions/lunar_perturbation.json", "application/json"),
 }
 _SECURITY_HEADERS = [
     ("Cache-Control", "no-store"),
@@ -186,6 +192,8 @@ class JobClient:
             ):
                 return "200 OK", "text/csv; charset=utf-8", result
             json_limit = _MAX_PLAN_BYTES if path.endswith("/plan") else 8192 if path == "/saved-runs" else 4096
+            if path.startswith("/comparisons/"):
+                json_limit = _MAX_CSV_BYTES + 4096
             if (
                 content_type == "application/json" and status in (200, 202, *_JOB_ERRORS)
                 and size <= (json_limit if status == 200 else 4096)
@@ -242,7 +250,8 @@ def create_app(
             return "200 OK", content_type, assets.joinpath(name).read_bytes()
         if method == "GET" and path == "/api/capabilities":
             return _json("200 OK", {"mission_jobs": jobs is not None})
-        if path in ("/api/validate", "/api/run", "/api/jobs", "/api/saved-runs") or _JOB_PATH.fullmatch(path):
+        comparison = _COMPARISON_PATH.fullmatch(path)
+        if path in ("/api/validate", "/api/run", "/api/jobs", "/api/saved-runs") or _JOB_PATH.fullmatch(path) or comparison:
             origin = environ.get("HTTP_ORIGIN")
             required = origin is not None or (identity is not None and method in ("POST", "PUT", "DELETE"))
             if (required and origin != expected_origin) or environ.get("HTTP_SEC_FETCH_SITE") == "cross-site":
@@ -258,6 +267,10 @@ def create_app(
             body = _validated_request(environ)
             return jobs.forward("POST", "/jobs", body, key, owner=owner) if isinstance(body, bytes) else body
         if jobs is not None:
+            if comparison and method == "POST":
+                if environ.get("CONTENT_LENGTH", "") not in ("", "0") or environ.get("HTTP_TRANSFER_ENCODING"):
+                    return _error("400 Bad Request", "A comparison takes only the two saved run IDs.")
+                return jobs.forward(method, path.removeprefix("/api"), owner=owner, timeout=18)
             if path == "/api/saved-runs" and method == "GET":
                 return jobs.forward("GET", "/saved-runs", owner=owner)
             if _JOB_PATH.fullmatch(path) and (method == "GET" or method in ("PUT", "DELETE")):

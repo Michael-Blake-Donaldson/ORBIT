@@ -5,7 +5,7 @@ import csv
 import sys
 from pathlib import Path
 
-from .comparison import compare_trajectories
+from .comparison import TrajectoryDelta, compare_trajectories
 from .errors import SimulationError
 from .files import atomic_text_output
 from .plan import load_mission
@@ -16,6 +16,14 @@ _HEADER = (
     "delta_r_km", "delta_t_km", "delta_n_km", "delta_vr_km_s", "delta_vt_km_s", "delta_vn_km_s",
 )
 _UNDEFINED_RTN = (None, None, None)
+
+
+def _csv_row(row: TrajectoryDelta) -> tuple[float | str | None, ...]:
+    return (
+        row.time_s, row.reference_kind, row.candidate_kind, row.position_difference_km, row.velocity_difference_km_s,
+        *row.position_delta_eci_km, *row.velocity_delta_eci_km_s,
+        *(row.position_delta_rtn_km or _UNDEFINED_RTN), *(row.velocity_delta_rtn_km_s or _UNDEFINED_RTN),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -35,11 +43,7 @@ def main(argv: list[str] | None = None) -> int:
             writer.writerow(_HEADER)
             for row in compare_trajectories(reference, candidate, args.interval_s):
                 difference = row.position_difference_km
-                writer.writerow((
-                    row.time_s, row.reference_kind, row.candidate_kind, difference, row.velocity_difference_km_s,
-                    *row.position_delta_eci_km, *row.velocity_delta_eci_km_s,
-                    *(row.position_delta_rtn_km or _UNDEFINED_RTN), *(row.velocity_delta_rtn_km_s or _UNDEFINED_RTN),
-                ))
+                writer.writerow(_csv_row(row))
                 count += 1
                 peak = max(peak, difference)
                 end = row.time_s

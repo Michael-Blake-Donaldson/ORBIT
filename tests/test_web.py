@@ -49,6 +49,7 @@ class WorkspaceTests(unittest.TestCase):
     def test_examples_are_identical_to_the_cli_plans(self):
         for name, source in (
             ("hohmann", "hohmann"), ("finite-burn", "finite_burn"), ("j2-precession", "j2_precession"),
+            ("lunar-baseline", "lunar_baseline"), ("lunar-perturbation", "lunar_perturbation"),
         ):
             with self.subTest(name=name):
                 response = self.request(f"/api/examples/{name}")
@@ -272,8 +273,65 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(json.loads(self.request("/api/saved-runs", **spoofed)["body"]), [])
             self.assertEqual(self.request(f"{first_path}/plan", **spoofed)["status"], "404 Not Found")
             self.assertEqual(self.request(saved_path, REQUEST_METHOD="DELETE", **spoofed)["status"], "404 Not Found")
+            first_id, second_id = first_path.rsplit("/", 1)[1], second_path.rsplit("/", 1)[1]
+            compare = f"/api/comparisons/{first_id}/{second_id}"
+            self.assertEqual(self.request(compare, REQUEST_METHOD="POST", **missing_origin)["status"], "403 Forbidden")
+            self.assertEqual(self.request(compare, REQUEST_METHOD="POST", **spoofed)["status"], "404 Not Found")
+            self.assertEqual(self.request(compare, REQUEST_METHOD="POST", **first_user)["status"], "404 Not Found")
             self.assertEqual(self.request(saved_path, REQUEST_METHOD="DELETE", **first_user)["status"], "200 OK")
             self.assertEqual(self.request(f"{first_path}/telemetry", **first_user)["status"], "404 Not Found")
+
+    @unittest.skipUnless(_JAVA and _CONTROLLER.is_file(), "build the Java controller to verify comparison jobs")
+    def test_saved_comparison_matches_lunar_reference_and_validates_compatibility(self):
+        with tempfile.TemporaryDirectory(prefix="orbit comparison workspace ") as spool:
+            jobs = self.new_job_client()
+            self.app = create_app(8765, jobs)
+            with self.running_service(jobs, spool):
+                baseline = self.save_example_run("lunar_baseline")
+                candidate = self.save_example_run("lunar_perturbation")
+                response = self.request(f"/api/comparisons/{baseline}/{candidate}", REQUEST_METHOD="POST")
+                self.assertEqual(response["status"], "200 OK", response["body"][:200])
+                data = json.loads(response["body"])
+                self.assertEqual((data["baseline"]["id"], data["candidate"]["id"]), (baseline, candidate))
+                report = data["report"]
+                self.assertEqual(report["rows"], 721)
+                self.assertEqual(report["interval_s"], 120)
+                self.assertFalse(report["impact_limited"])
+                self.assertEqual(report["engine"], data["candidate"]["engine"])
+                rows = list(csv.DictReader(io.StringIO(report["csv"])))
+                self.assertAlmostEqual(float(rows[-1]["position_difference_km"]), 12.142288848, places=6)
+                self.assertAlmostEqual(max(float(row["position_difference_km"]) for row in rows), 13.2033, places=4)
+
+                mismatched = self.save_example_run("hohmann")
+                bad = self.request(f"/api/comparisons/{baseline}/{mismatched}", REQUEST_METHOD="POST")
+                self.assertEqual(bad["status"], "422 Unprocessable Content")
+                self.assertIn("equal mission durations", json.loads(bad["body"])["message"])
+
+                short = {"schema_version": 1, "duration_s": 100, "sample_interval_s": 5}
+                stable = self.save_run(json.dumps(short | {
+                    "initial_orbit": {"periapsis_radius_km": 7000, "eccentricity": 0},
+                }).encode())
+                impact = self.save_run(json.dumps(short | {
+                    "initial_state": {"position_km": [6400, 0, 0], "velocity_km_s": [-1, 0, 0]},
+                }).encode())
+                limited = self.request(f"/api/comparisons/{stable}/{impact}", REQUEST_METHOD="POST")
+                self.assertEqual(limited["status"], "200 OK", limited["body"][:200])
+                limited_report = json.loads(limited["body"])["report"]
+                self.assertTrue(limited_report["impact_limited"])
+                self.assertEqual(limited_report["rows"], 4)
+
+    def save_example_run(self, example):
+        return self.save_run((_EXAMPLES / f"{example}.json").read_bytes())
+
+    def save_run(self, plan):
+        response = self.request("/api/jobs", plan, HTTP_IDEMPOTENCY_KEY=secrets.token_urlsafe())
+        self.assertEqual(response["status"], "202 Accepted", response["body"])
+        identifier = json.loads(response["body"])["id"]
+        path = f"/api/jobs/{identifier}"
+        self.assertEqual(self.wait_for_job(path)["state"], "complete")
+        saved = self.request(f"{path}/saved", REQUEST_METHOD="PUT")
+        self.assertEqual(saved["status"], "200 OK", saved["body"])
+        return identifier
 
     @staticmethod
     def new_job_client():
