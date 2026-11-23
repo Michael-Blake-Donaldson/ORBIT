@@ -29,6 +29,12 @@ def _positive_intervals(
     margin: Callable[[float], float], start: float, end: float, left: float, right: float,
 ) -> tuple[TimeInterval, ...]:
     positive_left, positive_right = left > 0, right > 0
+    # An exact endpoint contact cannot establish a crossing inside the step.
+    # Match the sign of the other endpoint so the interior extremum is checked.
+    if left == 0:
+        positive_left = positive_right
+    elif right == 0:
+        positive_right = positive_left
     if positive_left != positive_right:
         cross = brentq(margin, start, end, xtol=ROOT_TOLERANCE_S)
         return (TimeInterval(start, cross) if positive_left else TimeInterval(cross, end),)

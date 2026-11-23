@@ -11,6 +11,7 @@ from orbit_sim import (
     propagate,
     state_from_keplerian,
 )
+from orbit_sim.intervals import _append_interval, _positive_intervals
 
 _RADIUS_KM = 7000
 _EARTH_RADIUS_KM = 6378.137
@@ -24,6 +25,21 @@ def half_pass_duration(elevation_deg):
 
 
 class AccessTests(unittest.TestCase):
+    def test_endpoint_contact_does_not_hide_an_interior_crossing(self):
+        # The mask is met exactly at one endpoint, then missed until a later crossing.
+        for reverse in (False, True):
+            with self.subTest(reverse=reverse):
+                def margin(time, reverse=reverse):
+                    offset = 1 - time if reverse else time
+                    return offset * (offset - 0.5)
+
+                windows = []
+                for window in _positive_intervals(margin, 0, 1, margin(0), margin(1)):
+                    _append_interval(windows, window)
+                (window,) = windows
+                self.assertAlmostEqual(window.start_s, 0 if reverse else 0.5, places=7)
+                self.assertAlmostEqual(window.end_s, 0.5 if reverse else 1, places=7)
+
     def test_equatorial_pass_times_match_closed_form_with_boundary_clipping(self):
         period = math.tau / _RELATIVE_RATE
         mission = Mission(state_from_keplerian(KeplerianOrbit(_RADIUS_KM, 0)), period, period)
